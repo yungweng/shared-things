@@ -59,8 +59,19 @@ node dist/cli.js create-user --name "yonnock"
 node dist/cli.js create-user --name "florian"
 # → Save the API keys!
 
-# Start server
-PORT=3333 node dist/index.js
+# Start server with pm2 (recommended)
+npm install -g pm2
+PORT=3333 pm2 start dist/index.js --name shared-things-server
+
+# pm2 commands
+pm2 logs shared-things-server   # View logs
+pm2 status                      # Check status
+pm2 restart shared-things-server
+pm2 stop shared-things-server
+
+# Autostart after reboot
+pm2 startup
+pm2 save
 ```
 
 ### 3. Client (each user)
