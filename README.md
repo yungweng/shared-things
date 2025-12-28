@@ -59,20 +59,52 @@ node dist/cli.js create-user --name "yonnock"
 node dist/cli.js create-user --name "florian"
 # → Save the API keys!
 
-# Start server with pm2 (recommended)
-npm install -g pm2
-PORT=3333 pm2 start dist/index.js --name shared-things-server
+# Local testing
+PORT=3333 node dist/index.js
 
-# pm2 commands
-pm2 logs shared-things-server   # View logs
-pm2 status                      # Check status
-pm2 restart shared-things-server
-pm2 stop shared-things-server
-
-# Autostart after reboot
-pm2 startup
-pm2 save
+# Production (systemd) - see Server Deployment below
 ```
+
+## Server Deployment (Production)
+
+```bash
+# On your server
+cd /opt
+git clone https://github.com/moto-nrw/shared-things.git
+cd shared-things
+pnpm install
+pnpm build
+
+# Create users
+cd packages/server
+node dist/cli.js create-user --name "yonnock"
+node dist/cli.js create-user --name "florian"
+
+# Install systemd service
+sudo cp systemd/shared-things.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable shared-things
+sudo systemctl start shared-things
+
+# Check status
+sudo systemctl status shared-things
+sudo journalctl -u shared-things -f   # Follow logs
+
+# Deploy updates
+./deploy.sh
+```
+
+### Caddy (HTTPS)
+
+Add to `/etc/caddy/Caddyfile`:
+
+```
+things.yourdomain.com {
+    reverse_proxy localhost:3334
+}
+```
+
+Then `sudo systemctl reload caddy`.
 
 ### 3. Client (each user)
 

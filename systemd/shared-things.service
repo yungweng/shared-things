@@ -1,0 +1,19 @@
+[Unit]
+Description=Shared Things Sync Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/shared-things/packages/server
+Environment=NODE_ENV=production
+Environment=PORT=3334
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
