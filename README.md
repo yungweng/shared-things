@@ -90,6 +90,11 @@ shared-things install
 - **Server:** Linux VPS, Node.js 20+, Caddy (for HTTPS)
 - **Client:** macOS, Things 3 (URL Scheme enabled), Node.js 18+
 
+## Documentation
+
+- [Server Deployment](docs/DEPLOYMENT.md) - Hetzner VPS setup with Caddy & systemd
+- [Client Setup](docs/CLIENT.md) - macOS daemon installation & troubleshooting
+
 ## Security
 
 - Each user has their own API key
