@@ -38,57 +38,111 @@ shared-things/
 └── package.json     # pnpm workspace root
 ```
 
-## Setup
+## Quick Start
 
-### Server (Hetzner VPS)
+### 1. Server Setup
 
 ```bash
-# On your server
-git clone <repo>
+# Clone and build
+git clone https://github.com/moto-nrw/shared-things.git
 cd shared-things
 pnpm install
-pnpm --filter server build
+pnpm build
 
-# Create first user
-pnpm --filter server run create-user --name "yonnock"
-# → Returns API key
+# Start server (default port 3000)
+cd packages/server
+node dist/index.js
 
-# Start with systemd (see docs/DEPLOYMENT.md)
+# Or with custom port
+PORT=3333 node dist/index.js
 ```
 
-### Client (macOS)
+### 2. Create Users
 
 ```bash
-# On your Mac
-npm install -g shared-things
+cd packages/server
 
-# Initialize
+# Create a user - save the API key!
+node dist/cli.js create-user --name "yonnock"
+# → ID:      abc123...
+# → API Key: xyz789...  ← Save this!
+
+node dist/cli.js create-user --name "florian"
+# → Different API key for each user
+
+# List all users
+node dist/cli.js list-users
+```
+
+### 3. Client Setup (macOS)
+
+```bash
+# Install globally
+cd packages/daemon
+pnpm link --global
+
+# Run setup wizard
 shared-things init
-# → Enter server URL
-# → Enter your API key
-# → Select Things project to share
+```
 
-# Install daemon (runs at login)
+The wizard will ask for:
+1. **Server URL** - e.g., `http://localhost:3333` or `https://things.yourdomain.com`
+2. **API Key** - your personal key from step 2
+3. **Things Project** - which project to sync (must exist in Things)
+4. **Things Auth Token** - from Things → Settings → General → Things URLs → Manage
+
+### 4. Start the Daemon
+
+```bash
+# Install as LaunchAgent (auto-starts on login)
 shared-things install
 
-# Done! Changes sync automatically
+# Or run manually for testing
+shared-things sync
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `init` | Setup wizard (server URL, API key, project) |
-| `install` | Install launchd daemon (auto-start) |
+| `init` | Setup wizard (server URL, API key, project, Things token) |
+| `install` | Install launchd daemon (auto-starts on Mac login) |
 | `uninstall` | Remove launchd daemon |
 | `status` | Show sync status & last sync time |
-| `sync` | Force immediate sync |
-| `logs` | Show daemon logs |
+| `sync` | Force immediate one-time sync |
+| `logs` | Show daemon logs (`-f` to follow) |
+| `daemon` | Run sync loop (used internally by launchd) |
+
+## Server Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check (no auth required) |
+| `GET /state` | Get full project state |
+| `GET /delta?since=<timestamp>` | Get changes since timestamp |
+| `POST /push` | Push local changes |
+
+All endpoints except `/health` require `Authorization: Bearer <api-key>` header.
+
+## Configuration
+
+Config is stored in `~/.shared-things/config.json`:
+
+```json
+{
+  "serverUrl": "https://things.yourdomain.com",
+  "apiKey": "your-api-key",
+  "projectName": "Shared Project",
+  "pollInterval": 30,
+  "thingsAuthToken": "your-things-token"
+}
+```
 
 ## Requirements
 
-- **Server:** Linux VPS, Node.js 20+, Caddy (for HTTPS)
-- **Client:** macOS, Things 3 (URL Scheme enabled), Node.js 18+
+- **Server:** Linux/macOS, Node.js 18+
+- **Client:** macOS, Things 3, Node.js 18+
+- **Things:** URL Scheme must be enabled (Settings → General → Things URLs)
 
 ## Documentation
 
@@ -97,9 +151,9 @@ shared-things install
 
 ## Security
 
-- Each user has their own API key
-- All traffic over HTTPS
-- Server tracks who changed what (audit trail)
+- Each user has their own API key (hashed in database)
+- All traffic should be over HTTPS in production
+- Server tracks who changed what (`updatedBy` field)
 
 ## License
 
