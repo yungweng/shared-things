@@ -40,65 +40,52 @@ shared-things/
 
 ## Quick Start
 
-### 1. Server Setup
+### 1. Clone & Build
 
 ```bash
-# Clone and build
 git clone https://github.com/moto-nrw/shared-things.git
 cd shared-things
 pnpm install
 pnpm build
+```
 
-# Start server (default port 3000)
+### 2. Server (one person hosts)
+
+```bash
 cd packages/server
-node dist/index.js
 
-# Or with custom port
+# Create users
+node dist/cli.js create-user --name "yonnock"
+node dist/cli.js create-user --name "florian"
+# → Save the API keys!
+
+# Start server
 PORT=3333 node dist/index.js
 ```
 
-### 2. Create Users
+### 3. Client (each user)
 
 ```bash
-cd packages/server
-
-# Create a user - save the API key!
-node dist/cli.js create-user --name "yonnock"
-# → ID:      abc123...
-# → API Key: xyz789...  ← Save this!
-
-node dist/cli.js create-user --name "florian"
-# → Different API key for each user
-
-# List all users
-node dist/cli.js list-users
-```
-
-### 3. Client Setup (macOS)
-
-```bash
-# Install globally
 cd packages/daemon
 pnpm link --global
 
-# Run setup wizard
 shared-things init
+# → Server URL: http://localhost:3333 (or https://your-server.com)
+# → API Key: <your key from step 2>
+# → Project: <Things project to sync>
+# → Things Token: <from Things → Settings → General → Things URLs>
+
+shared-things install   # Auto-starts on login
 ```
 
-The wizard will ask for:
-1. **Server URL** - e.g., `http://localhost:3333` or `https://things.yourdomain.com`
-2. **API Key** - your personal key from step 2
-3. **Things Project** - which project to sync (must exist in Things)
-4. **Things Auth Token** - from Things → Settings → General → Things URLs → Manage
+### Updating
 
-### 4. Start the Daemon
+After pulling changes:
 
 ```bash
-# Install as LaunchAgent (auto-starts on login)
+pnpm build
+shared-things uninstall
 shared-things install
-
-# Or run manually for testing
-shared-things sync
 ```
 
 ## Commands
