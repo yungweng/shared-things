@@ -86,12 +86,24 @@ program
       process.exit(1);
     }
 
+    // Things Auth Token
+    console.log('\nStep 4: Things Auth Token');
+    console.log('─────────────────────────');
+    console.log('Find it in: Things → Settings → General → Things URLs → Manage\n');
+    const thingsAuthToken = await ask('Things Auth Token: ');
+    if (!thingsAuthToken) {
+      console.error('Things auth token is required for updating tasks.');
+      rl.close();
+      process.exit(1);
+    }
+
     // Save config
     saveConfig({
       serverUrl,
       apiKey,
       projectName,
       pollInterval: 30,
+      thingsAuthToken,
     });
 
     console.log('\nConfiguration saved!');

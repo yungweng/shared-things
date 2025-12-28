@@ -122,7 +122,8 @@ export function createTodo(projectName: string, todo: {
   if (todo.tags?.length) params.set('tags', todo.tags.join(','));
   params.set('list', projectName);
 
-  const url = `things:///add?${params.toString()}`;
+  // URLSearchParams encodes spaces as '+', but Things expects '%20'
+  const url = `things:///add?${params.toString().replace(/\+/g, '%20')}`;
   execSync(`open "${url}"`);
 }
 
@@ -146,7 +147,8 @@ export function updateTodo(authToken: string, thingsId: string, updates: {
   if (updates.completed !== undefined) params.set('completed', updates.completed.toString());
   if (updates.canceled !== undefined) params.set('canceled', updates.canceled.toString());
 
-  const url = `things:///update?${params.toString()}`;
+  // URLSearchParams encodes spaces as '+', but Things expects '%20'
+  const url = `things:///update?${params.toString().replace(/\+/g, '%20')}`;
   execSync(`open "${url}"`);
 }
 

@@ -129,9 +129,13 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
       pulled++;
     } else if (hasRemoteChanged(localTodo, remoteTodo)) {
       // Remote changed - update locally
-      // Note: This requires auth token which user must configure
-      // For now, log that update is needed
-      console.log(`Update needed for: ${remoteTodo.title}`);
+      updateTodo(config.thingsAuthToken, localTodo.thingsId, {
+        title: remoteTodo.title,
+        notes: remoteTodo.notes,
+        dueDate: remoteTodo.dueDate || undefined,
+        completed: remoteTodo.status === 'completed',
+        canceled: remoteTodo.status === 'canceled',
+      });
       pulled++;
     }
   }

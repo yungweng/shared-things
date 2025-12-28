@@ -135,6 +135,8 @@ export interface DaemonConfig {
   projectName: string;
   /** Polling interval in seconds */
   pollInterval: number;
+  /** Things URL Scheme auth token (from Things → Settings → General → Things URLs) */
+  thingsAuthToken: string;
 }
 
 // =============================================================================
