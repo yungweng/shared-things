@@ -168,9 +168,28 @@ Config is stored in `~/.shared-things/config.json`:
 }
 ```
 
+## Useful Commands
+
+### Client (macOS)
+
+```bash
+shared-things status    # Check daemon status & last sync
+shared-things sync      # Force immediate sync
+shared-things logs -f   # Follow daemon logs
+```
+
+### Server
+
+```bash
+sudo systemctl status shared-things     # Service status
+sudo journalctl -u shared-things -f     # Follow logs
+./deploy.sh                             # Deploy after git pull
+sqlite3 ~/.shared-things-server/data.db # Inspect database
+```
+
 ## Requirements
 
-- **Server:** Linux/macOS, Node.js 18+
+- **Server:** Linux/macOS, Node.js 20+
 - **Client:** macOS, Things 3, Node.js 18+
 - **Things:** URL Scheme must be enabled (Settings → General → Things URLs)
 
