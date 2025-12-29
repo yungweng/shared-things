@@ -21,23 +21,23 @@ pnpm --filter @shared-things/server build
 pnpm --filter @shared-things/daemon build
 pnpm --filter @shared-things/common build
 
-# Create server users (generates API keys)
-cd packages/server && node dist/cli.js create-user --name "username"
+# Run server locally (development)
+node packages/server/dist/cli.js start --port 3334
 
-# Run server locally
-PORT=3333 node packages/server/dist/index.js
+# Create server users (interactive prompt)
+node packages/server/dist/cli.js create-user
 
-# Daemon commands (after pnpm link --global in packages/daemon)
-shared-things init        # Configure server URL, API key, project name
-shared-things install     # Install launchd daemon
-shared-things uninstall   # Remove launchd daemon
-shared-things sync        # One-time manual sync
-shared-things status      # Show daemon status
-shared-things logs -f     # Follow daemon logs
-
-# Deploy to production (on server)
-./deploy.sh
+# Test daemon locally (after build)
+node packages/daemon/dist/cli.js init
+node packages/daemon/dist/cli.js sync
 ```
+
+## Published Packages
+
+- `shared-things-daemon` - CLI client for macOS users
+- `shared-things-server` - Self-hosted sync server
+
+Internal workspace packages use `@shared-things/*` naming.
 
 ## Architecture
 
@@ -62,6 +62,7 @@ shared-things logs -f     # Follow daemon logs
 - `GET /state` - Full project state
 - `GET /delta?since=<timestamp>` - Changes since timestamp
 - `POST /push` - Push local changes
+- `DELETE /reset` - Delete all user's data (clean slate)
 
 All except `/health` require `Authorization: Bearer <api-key>` header.
 
