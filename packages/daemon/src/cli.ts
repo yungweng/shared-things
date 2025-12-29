@@ -4,7 +4,7 @@
  */
 
 import { Command } from 'commander';
-import { input, select, password } from '@inquirer/prompts';
+import { input, select, password, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import updateNotifier from 'update-notifier';
 import { loadConfig, saveConfig, configExists, ensureConfigDir, getConfigDir } from './config.js';
@@ -34,6 +34,24 @@ program
   .description('Setup wizard')
   .action(async () => {
     console.log('\n🔄 shared-things Setup\n');
+
+    // Check if already configured
+    if (configExists()) {
+      const overwrite = await confirm({
+        message: 'Configuration already exists. Overwrite?',
+        default: false,
+      });
+      if (!overwrite) {
+        console.log(chalk.dim('Cancelled.'));
+        return;
+      }
+      // Delete old state to start fresh
+      const statePath = path.join(getConfigDir(), 'state.json');
+      if (fs.existsSync(statePath)) {
+        fs.unlinkSync(statePath);
+        console.log(chalk.dim('Old sync state cleared.\n'));
+      }
+    }
 
     // Check Things
     if (!isThingsRunning()) {
@@ -203,12 +221,14 @@ program
       process.exit(1);
     }
 
-    console.log('Syncing...');
     try {
       const result = await runSync();
-      console.log(`Done! Pushed: ${result.pushed}, Pulled: ${result.pulled}`);
+      if (result.isFirstSync) {
+        console.log(chalk.cyan('📥 First sync completed!'));
+      }
+      console.log(chalk.green(`✅ Done! Pushed: ${result.pushed}, Pulled: ${result.pulled}`));
     } catch (error) {
-      console.error(`Sync failed: ${error}`);
+      console.error(chalk.red(`❌ Sync failed: ${error}`));
       process.exit(1);
     }
   });
@@ -271,6 +291,70 @@ program
       const logs = fs.readFileSync(logPath, 'utf-8');
       console.log(logs);
     }
+  });
+
+// =============================================================================
+// reset command
+// =============================================================================
+program
+  .command('reset')
+  .description('Reset sync state (next sync will be a fresh start)')
+  .action(async () => {
+    const statePath = path.join(getConfigDir(), 'state.json');
+
+    if (!fs.existsSync(statePath)) {
+      console.log(chalk.yellow('No sync state to reset.'));
+      return;
+    }
+
+    const confirmed = await confirm({
+      message: 'This will clear your local sync state. Next sync will re-download all todos from server. Continue?',
+      default: false,
+    });
+
+    if (!confirmed) {
+      console.log(chalk.dim('Cancelled.'));
+      return;
+    }
+
+    fs.unlinkSync(statePath);
+    console.log(chalk.green('✅ Sync state reset. Run "shared-things sync" for a fresh sync.'));
+  });
+
+// =============================================================================
+// purge command
+// =============================================================================
+program
+  .command('purge')
+  .description('Remove all local data (config, state, logs)')
+  .action(async () => {
+    const configDir = getConfigDir();
+
+    if (!fs.existsSync(configDir)) {
+      console.log(chalk.yellow('Nothing to purge.'));
+      return;
+    }
+
+    // Check if daemon is running
+    const daemonStatus = getLaunchAgentStatus();
+    if (daemonStatus === 'running') {
+      console.log(chalk.yellow('⚠️  Daemon is still running. Stopping it first...'));
+      uninstallLaunchAgent();
+    }
+
+    const confirmed = await confirm({
+      message: `This will delete all local data in ${configDir}. You will need to run "init" again. Continue?`,
+      default: false,
+    });
+
+    if (!confirmed) {
+      console.log(chalk.dim('Cancelled.'));
+      return;
+    }
+
+    // Delete the entire config directory
+    fs.rmSync(configDir, { recursive: true, force: true });
+    console.log(chalk.green('✅ All local data removed. Run "shared-things init" to start fresh.'));
   });
 
 program.parse();

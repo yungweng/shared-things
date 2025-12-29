@@ -54,7 +54,7 @@ function saveLocalState(state: LocalState): void {
   fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
 }
 
-export async function runSync(): Promise<{ pushed: number; pulled: number }> {
+export async function runSync(): Promise<{ pushed: number; pulled: number; isFirstSync: boolean }> {
   const config = loadConfig();
   if (!config) {
     throw new Error('Not configured. Run "shared-things init" first.');
@@ -62,6 +62,7 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
 
   const api = new ApiClient(config.serverUrl, config.apiKey);
   const localState = loadLocalState();
+  const isFirstSync = localState.lastSyncedAt === new Date(0).toISOString();
 
   // 1. Read current Things state
   const currentTodos = getTodosFromProject(config.projectName);
@@ -215,7 +216,7 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
   localState.todos = currentTodosMap;
   saveLocalState(localState);
 
-  return { pushed, pulled };
+  return { pushed, pulled, isFirstSync };
 }
 
 function hasChanged(prev: ThingsTodo, curr: ThingsTodo): boolean {
