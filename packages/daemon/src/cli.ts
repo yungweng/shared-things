@@ -308,16 +308,30 @@ program
 program
   .command('reset')
   .description('Reset sync state (next sync will be a fresh start)')
-  .action(async () => {
-    const statePath = path.join(getConfigDir(), 'state.json');
+  .option('-s, --server', 'Also delete all data on the server')
+  .action(async (options) => {
+    if (!configExists()) {
+      console.log(chalk.yellow('Not configured. Nothing to reset.'));
+      return;
+    }
 
-    if (!fs.existsSync(statePath)) {
+    const statePath = path.join(getConfigDir(), 'state.json');
+    const hasLocalState = fs.existsSync(statePath);
+
+    if (!hasLocalState && !options.server) {
       console.log(chalk.yellow('No sync state to reset.'));
       return;
     }
 
+    // Build confirmation message based on options
+    let message = 'This will clear your local sync state.';
+    if (options.server) {
+      message = 'This will clear your local sync state AND delete all your data on the server.';
+    }
+    message += ' Continue?';
+
     const confirmed = await confirm({
-      message: 'This will clear your local sync state. Next sync will re-download all todos from server. Continue?',
+      message,
       default: false,
     });
 
@@ -326,9 +340,30 @@ program
       return;
     }
 
-    fs.unlinkSync(statePath);
-    log('Sync state reset by user');
-    console.log(chalk.green('✅ Sync state reset. Run "shared-things sync" for a fresh sync.'));
+    // Reset server data if requested
+    if (options.server) {
+      const config = loadConfig()!;
+      const api = new ApiClient(config.serverUrl, config.apiKey);
+
+      try {
+        console.log(chalk.dim('Deleting server data...'));
+        const result = await api.reset();
+        log(`Server reset: deleted ${result.deleted.todos} todos, ${result.deleted.headings} headings`);
+        console.log(chalk.green(`✅ Server data deleted (${result.deleted.todos} todos, ${result.deleted.headings} headings)`));
+      } catch (error) {
+        logError('Server reset failed', error);
+        console.error(chalk.red(`❌ Failed to reset server: ${error}`));
+        return;
+      }
+    }
+
+    // Reset local state
+    if (hasLocalState) {
+      fs.unlinkSync(statePath);
+      log('Sync state reset by user');
+    }
+
+    console.log(chalk.green('✅ Reset complete. Run "shared-things sync" for a fresh sync.'));
   });
 
 // =============================================================================

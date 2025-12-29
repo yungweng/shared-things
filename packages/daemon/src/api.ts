@@ -58,4 +58,13 @@ export class ApiClient {
   async health(): Promise<{ status: string; timestamp: string }> {
     return this.request<{ status: string; timestamp: string }>('/health');
   }
+
+  /**
+   * Reset all user data on server
+   */
+  async reset(): Promise<{ success: boolean; deleted: { todos: number; headings: number } }> {
+    return this.request<{ success: boolean; deleted: { todos: number; headings: number } }>('/reset', {
+      method: 'DELETE',
+    });
+  }
 }

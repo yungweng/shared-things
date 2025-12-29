@@ -15,6 +15,7 @@ import {
   upsertTodoByServerId,
   deleteHeading,
   deleteTodoByServerId,
+  resetUserData,
 } from './db.js';
 
 export function registerRoutes(app: FastifyInstance, db: DB) {
@@ -115,6 +116,20 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
         syncedAt: new Date().toISOString(),
       },
       conflicts,
+    };
+  });
+
+  // Reset user data (for clean fresh start)
+  app.delete('/reset', async (request) => {
+    const userId = request.user.id;
+    const result = resetUserData(db, userId);
+
+    return {
+      success: true,
+      deleted: {
+        todos: result.deletedTodos,
+        headings: result.deletedHeadings,
+      },
     };
   });
 }

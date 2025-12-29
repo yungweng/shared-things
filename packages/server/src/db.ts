@@ -374,3 +374,27 @@ export function getDeletedSince(db: DB, since: string): { todos: string[]; headi
     headings: rows.filter(r => r.item_type === 'heading').map(r => r.things_id),
   };
 }
+
+// =============================================================================
+// Reset user data
+// =============================================================================
+
+/**
+ * Delete all data created/updated by a user
+ * Used for clean reset when client wants to start fresh
+ */
+export function resetUserData(db: DB, userId: string): { deletedTodos: number; deletedHeadings: number } {
+  // Delete all todos updated by this user
+  const todoResult = db.prepare(`DELETE FROM todos WHERE updated_by = ?`).run(userId);
+
+  // Delete all headings updated by this user
+  const headingResult = db.prepare(`DELETE FROM headings WHERE updated_by = ?`).run(userId);
+
+  // Clear deleted_items tracking for this user
+  db.prepare(`DELETE FROM deleted_items WHERE deleted_by = ?`).run(userId);
+
+  return {
+    deletedTodos: todoResult.changes,
+    deletedHeadings: headingResult.changes,
+  };
+}
