@@ -12,6 +12,7 @@ import { listProjects, projectExists, isThingsRunning } from './things.js';
 import { ApiClient } from './api.js';
 import { runSync } from './sync.js';
 import { installLaunchAgent, uninstallLaunchAgent, getLaunchAgentStatus } from './launchagent.js';
+import { log, logError, logDaemonStart, logDaemonStop } from './logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -228,6 +229,7 @@ program
       }
       console.log(chalk.green(`✅ Done! Pushed: ${result.pushed}, Pulled: ${result.pulled}`));
     } catch (error) {
+      logError('Manual sync failed', error);
       console.error(chalk.red(`❌ Sync failed: ${error}`));
       process.exit(1);
     }
@@ -246,25 +248,32 @@ program
     }
 
     const config = loadConfig()!;
+    logDaemonStart();
+    log(`Polling interval: ${config.pollInterval}s`);
     console.log(`Daemon started. Syncing every ${config.pollInterval}s...`);
+
+    // Handle graceful shutdown
+    const shutdown = () => {
+      logDaemonStop();
+      process.exit(0);
+    };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
 
     // Initial sync
     try {
       await runSync();
-      console.log(`[${new Date().toISOString()}] Initial sync complete.`);
+      log('Initial sync complete');
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] Sync error: ${error}`);
+      logError('Initial sync failed', error);
     }
 
     // Poll loop
     setInterval(async () => {
       try {
-        const result = await runSync();
-        if (result.pushed > 0 || result.pulled > 0) {
-          console.log(`[${new Date().toISOString()}] Pushed: ${result.pushed}, Pulled: ${result.pulled}`);
-        }
+        await runSync();
       } catch (error) {
-        console.error(`[${new Date().toISOString()}] Sync error: ${error}`);
+        logError('Sync failed', error);
       }
     }, config.pollInterval * 1000);
   });
@@ -318,6 +327,7 @@ program
     }
 
     fs.unlinkSync(statePath);
+    log('Sync state reset by user');
     console.log(chalk.green('✅ Sync state reset. Run "shared-things sync" for a fresh sync.'));
   });
 
