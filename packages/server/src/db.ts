@@ -83,7 +83,17 @@ export function initDatabase(): DB {
 // User queries
 // =============================================================================
 
+export function userExists(db: DB, name: string): boolean {
+  const row = db.prepare(`SELECT 1 FROM users WHERE name = ?`).get(name);
+  return !!row;
+}
+
 export function createUser(db: DB, name: string): { id: string; apiKey: string } {
+  // Check for duplicate username
+  if (userExists(db, name)) {
+    throw new Error(`User "${name}" already exists`);
+  }
+
   const id = crypto.randomUUID();
   const apiKey = crypto.randomBytes(32).toString('hex');
   const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');

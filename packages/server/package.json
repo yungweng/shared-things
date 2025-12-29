@@ -1,26 +1,52 @@
 {
-  "name": "@shared-things/server",
+  "name": "shared-things-server",
   "version": "0.1.0",
+  "description": "Sync server for Things 3 projects",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "shared-things-server": "./dist/cli.js"
+    "shared-things-server": "dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "create-user": "tsx src/cli.ts create-user"
+    "build": "tsup",
+    "dev": "tsx watch src/cli.ts start",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "things",
+    "things3",
+    "sync",
+    "server"
+  ],
+  "author": "yungweng",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yungweng/shared-things.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yungweng/shared-things/issues"
+  },
+  "homepage": "https://github.com/yungweng/shared-things#readme",
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
-    "@shared-things/common": "workspace:*",
+    "@fastify/cors": "^9.0.0",
+    "@inquirer/prompts": "^8.1.0",
     "better-sqlite3": "^11.0.0",
-    "fastify": "^4.26.0",
-    "@fastify/cors": "^9.0.0"
+    "chalk": "^5.6.2",
+    "commander": "^12.0.0",
+    "fastify": "^4.26.0"
   },
   "devDependencies": {
+    "@shared-things/common": "workspace:*",
     "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.0.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0"
   }
