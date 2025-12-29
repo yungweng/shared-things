@@ -21,7 +21,8 @@ TODO: Add demo GIF showing sync in action
 
 **Client (each user)**
 ```bash
-npx shared-things-daemon init
+npm install -g shared-things-daemon
+shared-things init
 ```
 That's it. Follow the prompts.
 
