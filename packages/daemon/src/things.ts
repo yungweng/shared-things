@@ -107,7 +107,7 @@ export function getHeadingsFromProject(projectName: string): ThingsHeading[] {
 }
 
 /**
- * Create a new todo in Things via URL scheme
+ * Create a new todo in Things via AppleScript (doesn't activate Things)
  */
 export function createTodo(projectName: string, todo: {
   title: string;
@@ -115,41 +115,73 @@ export function createTodo(projectName: string, todo: {
   dueDate?: string;
   tags?: string[];
 }): void {
-  const params = new URLSearchParams();
-  params.set('title', todo.title);
-  if (todo.notes) params.set('notes', todo.notes);
-  if (todo.dueDate) params.set('when', todo.dueDate);
-  if (todo.tags?.length) params.set('tags', todo.tags.join(','));
-  params.set('list', projectName);
+  const escapedTitle = todo.title.replace(/"/g, '\\"');
+  const escapedNotes = (todo.notes || '').replace(/"/g, '\\"');
 
-  // URLSearchParams encodes spaces as '+', but Things expects '%20'
-  const url = `things:///add?${params.toString().replace(/\+/g, '%20')}`;
-  execSync(`open "${url}"`);
+  let dueDatePart = '';
+  if (todo.dueDate) {
+    // Parse YYYY-MM-DD format
+    const [year, month, day] = todo.dueDate.split('-').map(Number);
+    dueDatePart = `set due date of newTodo to date "${month}/${day}/${year}"`;
+  }
+
+  const script = `
+    tell application "Things3"
+      set newTodo to make new to do ¬
+        with properties {name:"${escapedTitle}", notes:"${escapedNotes}"} ¬
+        at beginning of project "${projectName}"
+      ${dueDatePart}
+    end tell
+  `;
+
+  runAppleScript(script);
 }
 
 /**
- * Update an existing todo via URL scheme
+ * Update an existing todo via AppleScript (doesn't activate Things)
  */
-export function updateTodo(authToken: string, thingsId: string, updates: {
+export function updateTodo(_authToken: string, thingsId: string, updates: {
   title?: string;
   notes?: string;
   dueDate?: string;
   completed?: boolean;
   canceled?: boolean;
 }): void {
-  const params = new URLSearchParams();
-  params.set('auth-token', authToken);
-  params.set('id', thingsId);
+  const setParts: string[] = [];
 
-  if (updates.title !== undefined) params.set('title', updates.title);
-  if (updates.notes !== undefined) params.set('notes', updates.notes);
-  if (updates.dueDate !== undefined) params.set('when', updates.dueDate);
-  if (updates.completed !== undefined) params.set('completed', updates.completed.toString());
-  if (updates.canceled !== undefined) params.set('canceled', updates.canceled.toString());
+  if (updates.title !== undefined) {
+    const escaped = updates.title.replace(/"/g, '\\"');
+    setParts.push(`set name of t to "${escaped}"`);
+  }
+  if (updates.notes !== undefined) {
+    const escaped = updates.notes.replace(/"/g, '\\"');
+    setParts.push(`set notes of t to "${escaped}"`);
+  }
+  if (updates.dueDate !== undefined) {
+    if (updates.dueDate) {
+      const [year, month, day] = updates.dueDate.split('-').map(Number);
+      setParts.push(`set due date of t to date "${month}/${day}/${year}"`);
+    } else {
+      setParts.push(`set due date of t to missing value`);
+    }
+  }
+  if (updates.completed === true) {
+    setParts.push(`set status of t to completed`);
+  }
+  if (updates.canceled === true) {
+    setParts.push(`set status of t to canceled`);
+  }
 
-  // URLSearchParams encodes spaces as '+', but Things expects '%20'
-  const url = `things:///update?${params.toString().replace(/\+/g, '%20')}`;
-  execSync(`open "${url}"`);
+  if (setParts.length === 0) return;
+
+  const script = `
+    tell application "Things3"
+      set t to to do id "${thingsId}"
+      ${setParts.join('\n      ')}
+    end tell
+  `;
+
+  runAppleScript(script);
 }
 
 /**
