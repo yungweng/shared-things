@@ -91,6 +91,9 @@ npm update -g shared-things-server
 | `shared-things-server create-user` | Create user and generate API key |
 | `shared-things-server list-users` | List all users |
 | `shared-things-server delete-user` | Delete a user and their data |
+| `shared-things-server list-todos` | List all todos (--user to filter) |
+| `shared-things-server reset` | Delete all todos/headings (keeps users) |
+| `shared-things-server purge` | Delete entire database |
 
 ## Server Endpoints
 
