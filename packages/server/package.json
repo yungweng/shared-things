@@ -1,6 +1,6 @@
 {
   "name": "shared-things-server",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Sync server for Things 3 projects",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,7 +19,13 @@
     "things",
     "things3",
     "sync",
-    "server"
+    "server",
+    "macos",
+    "todo",
+    "productivity",
+    "collaboration",
+    "self-hosted",
+    "cli"
   ],
   "author": "yungweng",
   "license": "MIT",

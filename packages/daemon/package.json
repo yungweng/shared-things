@@ -1,6 +1,6 @@
 {
   "name": "shared-things-daemon",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Sync Things 3 projects between multiple macOS users",
   "type": "module",
   "main": "./dist/cli.js",
@@ -20,7 +20,12 @@
     "things3",
     "sync",
     "macos",
-    "productivity"
+    "productivity",
+    "todo",
+    "collaboration",
+    "daemon",
+    "launchd",
+    "cli"
   ],
   "author": "yungweng",
   "license": "MIT",

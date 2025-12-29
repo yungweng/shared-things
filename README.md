@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="https://img.shields.io/npm/v/shared-things-server.svg" alt="npm version">
+  <img src="https://img.shields.io/npm/l/shared-things-server.svg" alt="license">
+  <img src="https://img.shields.io/node/v/shared-things-server.svg" alt="node version">
+</p>
+
 # shared-things
 
-Sync a Things 3 project between multiple users via a central server.
+**Sync a Things 3 project between multiple macOS users in real-time.**
+
+Share todos with your team, family, or collaborators. Each person runs a lightweight daemon that syncs changes to a central server every 30 seconds. No cloud subscription required - host it yourself.
 
 ```mermaid
 flowchart LR
@@ -10,22 +18,14 @@ flowchart LR
     DB <-->|AppleScript| B[Things User B]
 ```
 
-## How It Works
+## Features
 
-1. Each user runs a local **daemon** that polls Things every 30 seconds
-2. Changes are pushed to a central **server** (your own VPS or local machine)
-3. Other users pull changes and apply them locally via Things URL Scheme
-4. Server is the **single source of truth** - last write wins on conflicts
-
-## What Gets Synced
-
-Within the shared project:
-- Todos (title, notes, due date, tags, status)
-- Headings (title, order)
-
-Not synced:
-- Checklist items (kept local)
-- Areas (project must exist in both Things apps)
+- **Real-time sync** - Changes propagate within 30 seconds
+- **Self-hosted** - Run the server on your own VPS or local machine
+- **Multi-user** - Each user gets their own API key
+- **Conflict resolution** - Server is the single source of truth (last write wins)
+- **Background daemon** - Auto-starts on login, runs silently
+- **Interactive CLI** - Easy setup wizard and management commands
 
 ## Quick Start
 
@@ -39,17 +39,11 @@ npm install -g shared-things-server
 shared-things-server create-user
 # Interactive prompt for username, returns API key
 
-# Start server (foreground)
-shared-things-server start --port 3334
-
-# Or start in background (like docker compose up -d)
+# Start server in background
 shared-things-server start -d --port 3334
 shared-things-server status   # Check if running
 shared-things-server logs -f  # Follow logs
-shared-things-server stop     # Stop server
 ```
-
-For production, use systemd (see below) or the built-in background mode.
 
 ### Client Setup (each user)
 
@@ -57,23 +51,11 @@ For production, use systemd (see below) or the built-in background mode.
 # Install
 npm install -g shared-things-daemon
 
-# Configure
+# Configure (interactive wizard)
 shared-things init
-# Interactive setup wizard:
-# → Server URL: https://your-server.com (or http://localhost:3334)
-# → API Key: <your key from server setup>
-# → Project: <Things project to sync>
-# → Things Token: <from Things → Settings → General → Things URLs>
 
 # Start daemon (auto-starts on login)
 shared-things install
-```
-
-### Updating
-
-```bash
-npm update -g shared-things-daemon
-npm update -g shared-things-server
 ```
 
 ## Client Commands
@@ -93,7 +75,7 @@ npm update -g shared-things-server
 
 | Command | Description |
 |---------|-------------|
-| `shared-things-server start [-d] [-p port]` | Start server (use -d for background/detached mode) |
+| `shared-things-server start [-d] [-p port]` | Start server (-d for background mode) |
 | `shared-things-server stop` | Stop background server |
 | `shared-things-server status` | Show server status (running, PID, users, todos) |
 | `shared-things-server logs [-f]` | Show server logs (-f to follow) |
@@ -104,26 +86,29 @@ npm update -g shared-things-server
 | `shared-things-server reset` | Delete all todos/headings (keeps users) |
 | `shared-things-server purge` | Delete entire database |
 
-## Server Endpoints
+## What Gets Synced
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check (no auth required) |
-| `GET /state` | Get full project state |
-| `GET /delta?since=<timestamp>` | Get changes since timestamp |
-| `POST /push` | Push local changes |
-| `DELETE /reset` | Delete all user data |
+Within the shared project:
+- Todos (title, notes, due date, tags)
+- Headings (title, order)
 
-All endpoints except `/health` require `Authorization: Bearer <api-key>` header.
+Not synced:
+- Completed todos (Things API limitation)
+- Checklist items (kept local)
+- Areas (project must exist in both Things apps)
 
-## Production Deployment
+## Requirements
+
+- **Server:** Linux/macOS, Node.js 18+
+- **Client:** macOS, Things 3, Node.js 18+
+- **Things:** URL Scheme must be enabled (Settings → General → Things URLs)
+
+<details>
+<summary><strong>Production Deployment</strong></summary>
 
 ### Server with systemd
 
 ```bash
-# Install globally
-npm install -g shared-things-server
-
 # Create systemd service
 sudo tee /etc/systemd/system/shared-things.service << EOF
 [Unit]
@@ -158,9 +143,12 @@ things.yourdomain.com {
 
 Then `sudo systemctl reload caddy`.
 
-## Configuration
+</details>
 
-Client config is stored in `~/.shared-things/config.json`:
+<details>
+<summary><strong>Configuration Files</strong></summary>
+
+Client config (`~/.shared-things/config.json`):
 
 ```json
 {
@@ -172,30 +160,41 @@ Client config is stored in `~/.shared-things/config.json`:
 }
 ```
 
-Server data is stored in `~/.shared-things-server/data.db` (SQLite).
+Server data: `~/.shared-things-server/data.db` (SQLite)
 
-## Requirements
+</details>
 
-- **Server:** Linux/macOS, Node.js 18+
-- **Client:** macOS, Things 3, Node.js 18+
-- **Things:** URL Scheme must be enabled (Settings → General → Things URLs)
+<details>
+<summary><strong>API Endpoints</strong></summary>
 
-## Architecture
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check (no auth required) |
+| `GET /state` | Get full project state |
+| `GET /delta?since=<timestamp>` | Get changes since timestamp |
+| `POST /push` | Push local changes |
+| `DELETE /reset` | Delete all user data |
 
-```
-shared-things/
-├── packages/
-│   ├── common/      # Shared types & validation
-│   ├── server/      # REST API + SQLite
-│   └── daemon/      # macOS client
-└── package.json     # pnpm workspace root
-```
+All endpoints except `/health` require `Authorization: Bearer <api-key>` header.
+
+</details>
 
 ## Security
 
 - Each user has their own API key (hashed in database)
 - All traffic should be over HTTPS in production
 - Server tracks who changed what (`updatedBy` field)
+
+## Contributing
+
+Issues and PRs welcome! This is a monorepo using pnpm workspaces:
+
+```bash
+git clone https://github.com/yungweng/shared-things.git
+cd shared-things
+pnpm install
+pnpm build
+```
 
 ## License
 
