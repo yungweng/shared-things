@@ -17,9 +17,59 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 
-// Check for updates
+// Check for updates with immediate feedback
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
-updateNotifier({ pkg }).notify();
+const updateCheckInterval = 1000 * 60 * 60; // 1 hour
+
+// updateNotifier() calls check() which loads cached update into notifier.update
+// and clears the cache (by design - it's a one-time read)
+const notifier = updateNotifier({ pkg, updateCheckInterval });
+
+// Validate cached update against current version (user may have upgraded)
+if (notifier.update) {
+  notifier.update.current = pkg.version;
+  // Clear if no longer outdated
+  if (notifier.update.current === notifier.update.latest) {
+    notifier.update = undefined;
+  }
+}
+
+// Detect first run: lastUpdateCheck was just set by constructor (within last second)
+const lastCheck = notifier.config?.get('lastUpdateCheck') ?? 0;
+const isFirstRun = Date.now() - lastCheck < 1000;
+const intervalPassed = Date.now() - lastCheck >= updateCheckInterval;
+
+// Fetch immediately if no cached update and (first run OR interval passed)
+// This fixes the 24h delay issue where check() skips spawning on first run
+if (!notifier.update && (isFirstRun || intervalPassed)) {
+  try {
+    const update = await notifier.fetchInfo();
+    notifier.config?.set('lastUpdateCheck', Date.now());
+    if (update && update.type !== 'latest') {
+      notifier.update = update;
+    }
+  } catch {
+    // Ignore network errors
+  }
+}
+
+// Re-cache update for next run (check() deleted it when reading)
+// Only cache if there's actually an update available
+if (notifier.update && notifier.update.current !== notifier.update.latest) {
+  notifier.config?.set('update', notifier.update);
+} else {
+  notifier.config?.delete('update');
+}
+
+// Show notification on exit (bypasses TTY check that blocks notify())
+process.on('exit', () => {
+  if (notifier.update && notifier.update.current !== notifier.update.latest) {
+    console.error(
+      chalk.yellow(`\n  Update available: ${notifier.update.current} → ${notifier.update.latest}`) +
+      chalk.dim(`\n  Run: npm i -g ${pkg.name}\n`)
+    );
+  }
+});
 
 const program = new Command();
 
