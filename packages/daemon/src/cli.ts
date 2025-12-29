@@ -138,7 +138,7 @@ program
 program
   .command('status')
   .description('Show sync status')
-  .action(() => {
+  .action(async () => {
     if (!configExists()) {
       console.log(chalk.yellow('⚠️  Not configured'));
       console.log(chalk.dim('Run "shared-things init" to get started.'));
@@ -150,10 +150,21 @@ program
     const isRunning = daemonStatus === 'running';
 
     console.log(chalk.bold('\n📊 shared-things Status\n'));
-    console.log(`${chalk.dim('Server:')}    ${chalk.cyan(config.serverUrl)}`);
+
+    // Check server connectivity
+    const api = new ApiClient(config.serverUrl, config.apiKey);
+    let serverReachable = false;
+    try {
+      await api.health();
+      serverReachable = true;
+    } catch {
+      serverReachable = false;
+    }
+
+    console.log(`${chalk.dim('Server:')}    ${chalk.cyan(config.serverUrl)} ${serverReachable ? chalk.green('●') : chalk.red('○')}`);
     console.log(`${chalk.dim('Project:')}   ${chalk.white(config.projectName)}`);
     console.log(`${chalk.dim('Interval:')}  ${config.pollInterval}s`);
-    console.log(`${chalk.dim('Daemon:')}    ${isRunning ? chalk.green('● running') : chalk.red('○ stopped')}`);
+    console.log(`${chalk.dim('Daemon:')}    ${isRunning ? chalk.green('● running') : chalk.red('○ stopped')}`)
 
     // Show last sync time
     const statePath = path.join(getConfigDir(), 'state.json');
@@ -162,6 +173,8 @@ program
       const lastSync = new Date(state.lastSyncedAt);
       const ago = formatTimeAgo(lastSync);
       console.log(`${chalk.dim('Last sync:')} ${ago}`);
+    } else {
+      console.log(`${chalk.dim('Last sync:')} ${chalk.yellow('never')}`);
     }
     console.log();
   });
