@@ -15,6 +15,7 @@ import { installLaunchAgent, uninstallLaunchAgent, getLaunchAgentStatus } from '
 import { log, logError, logDaemonStart, logDaemonStop } from './logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'child_process';
 
 // Check for updates
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
@@ -311,7 +312,6 @@ program
     }
 
     if (options.follow) {
-      const { spawn } = require('child_process');
       spawn('tail', ['-f', logPath], { stdio: 'inherit' });
     } else {
       const logs = fs.readFileSync(logPath, 'utf-8');
