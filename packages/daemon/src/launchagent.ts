@@ -29,6 +29,26 @@ export function installLaunchAgent(): void {
 
   const logPath = path.join(os.homedir(), '.shared-things', 'daemon.log');
 
+  // Get the directory containing the current node binary (supports nvm, fnm, etc.)
+  let nodeBinDir: string;
+  try {
+    const nodePath = execSync('which node', { encoding: 'utf-8' }).trim();
+    nodeBinDir = path.dirname(nodePath);
+  } catch {
+    nodeBinDir = '/usr/local/bin';
+  }
+
+  // Build PATH with node's bin dir first, then standard paths
+  const envPath = [
+    nodeBinDir,
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    '/opt/homebrew/bin',
+  ]
+    .filter((p, i, arr) => arr.indexOf(p) === i) // dedupe
+    .join(':');
+
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -57,7 +77,7 @@ export function installLaunchAgent(): void {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <string>${envPath}</string>
     </dict>
 
     <key>ThrottleInterval</key>
