@@ -12,9 +12,9 @@ import {
   getTodosSince,
   getDeletedSince,
   upsertHeading,
-  upsertTodo,
+  upsertTodoByServerId,
   deleteHeading,
-  deleteTodo,
+  deleteTodoByServerId,
 } from './db.js';
 
 export function registerRoutes(app: FastifyInstance, db: DB) {
@@ -76,9 +76,9 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
       upsertHeading(db, heading.thingsId, heading.title, heading.position, userId);
     }
 
-    // Process todo deletions
-    for (const thingsId of todos.deleted) {
-      deleteTodo(db, thingsId, userId);
+    // Process todo deletions (by server ID)
+    for (const serverId of todos.deleted) {
+      deleteTodoByServerId(db, serverId, userId);
     }
 
     // Process todo upserts
@@ -91,7 +91,9 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
         headingId = headingRow?.id || null;
       }
 
-      upsertTodo(db, todo.thingsId, {
+      // Use serverId for updates if provided, otherwise create new
+      upsertTodoByServerId(db, todo.serverId, {
+        thingsId: todo.thingsId,
         title: todo.title,
         notes: todo.notes,
         dueDate: todo.dueDate,

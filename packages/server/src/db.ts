@@ -281,8 +281,58 @@ export function upsertTodo(
   }
 }
 
+/**
+ * Upsert todo using server ID (preferred for cross-device sync)
+ * - If serverId provided: update existing record by serverId
+ * - If no serverId: create new record
+ */
+export function upsertTodoByServerId(
+  db: DB,
+  serverId: string | undefined,
+  data: {
+    thingsId: string;
+    title: string;
+    notes: string;
+    dueDate: string | null;
+    tags: string[];
+    status: 'open' | 'completed' | 'canceled';
+    headingId: string | null;
+    position: number;
+  },
+  userId: string
+): string {
+  const now = new Date().toISOString();
+  const tagsJson = JSON.stringify(data.tags);
+
+  if (serverId) {
+    // Update existing by server ID
+    const existing = db.prepare(`SELECT id FROM todos WHERE id = ?`).get(serverId) as { id: string } | undefined;
+
+    if (existing) {
+      db.prepare(`
+        UPDATE todos
+        SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
+            heading_id = ?, position = ?, updated_at = ?, updated_by = ?
+        WHERE id = ?
+      `).run(data.title, data.notes, data.dueDate, tagsJson, data.status,
+        data.headingId, data.position, now, userId, serverId);
+      return serverId;
+    }
+    // If serverId provided but not found, fall through to create
+  }
+
+  // Create new record
+  const id = serverId || crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO todos (id, things_id, title, notes, due_date, tags, status, heading_id, position, updated_at, updated_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, data.thingsId, data.title, data.notes, data.dueDate, tagsJson, data.status,
+    data.headingId, data.position, now, userId, now);
+  return id;
+}
+
 export function deleteTodo(db: DB, thingsId: string, userId: string): boolean {
-  const existing = db.prepare(`SELECT id FROM todos WHERE things_id = ?`).get(thingsId) as { id: string } | undefined;
+  const existing = db.prepare(`SELECT id, things_id FROM todos WHERE things_id = ?`).get(thingsId) as { id: string; things_id: string } | undefined;
   if (!existing) return false;
 
   const now = new Date().toISOString();
@@ -294,6 +344,23 @@ export function deleteTodo(db: DB, thingsId: string, userId: string): boolean {
   `).run(deleteId, thingsId, now, userId);
 
   db.prepare(`DELETE FROM todos WHERE things_id = ?`).run(thingsId);
+  return true;
+}
+
+export function deleteTodoByServerId(db: DB, serverId: string, userId: string): boolean {
+  const existing = db.prepare(`SELECT id, things_id FROM todos WHERE id = ?`).get(serverId) as { id: string; things_id: string } | undefined;
+  if (!existing) return false;
+
+  const now = new Date().toISOString();
+  const deleteId = crypto.randomUUID();
+
+  // Track deletion using server ID (for sync purposes)
+  db.prepare(`
+    INSERT INTO deleted_items (id, things_id, item_type, deleted_at, deleted_by)
+    VALUES (?, ?, 'todo', ?, ?)
+  `).run(deleteId, serverId, now, userId);
+
+  db.prepare(`DELETE FROM todos WHERE id = ?`).run(serverId);
   return true;
 }
 
