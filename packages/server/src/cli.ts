@@ -10,10 +10,40 @@ import { initDatabase, createUser, listUsers, userExists, getAllTodos, getAllHea
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from 'child_process';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { authMiddleware } from './auth.js';
 import { registerRoutes } from './routes.js';
+
+// Data directory for server files
+const DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), '.shared-things-server');
+const PID_FILE = path.join(DATA_DIR, 'server.pid');
+const LOG_FILE = path.join(DATA_DIR, 'server.log');
+
+function ensureDataDir(): void {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+function isServerRunning(): { running: boolean; pid?: number } {
+  if (!fs.existsSync(PID_FILE)) {
+    return { running: false };
+  }
+
+  const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+
+  try {
+    // Check if process exists (signal 0 doesn't kill, just checks)
+    process.kill(pid, 0);
+    return { running: true, pid };
+  } catch {
+    // Process doesn't exist, clean up stale PID file
+    fs.unlinkSync(PID_FILE);
+    return { running: false };
+  }
+}
 
 const program = new Command();
 
@@ -29,14 +59,60 @@ program
   .command('start')
   .description('Start the sync server')
   .option('-p, --port <port>', 'Port to listen on', '3334')
-  .option('-h, --host <host>', 'Host to bind to', '0.0.0.0')
+  .option('--host <host>', 'Host to bind to', '0.0.0.0')
+  .option('-d, --detach', 'Run server in background (detached mode)')
   .action(async (options) => {
-    const db = initDatabase();
     const PORT = parseInt(options.port, 10);
     const HOST = options.host;
+    const isChildProcess = process.env.SHARED_THINGS_DETACHED === '1';
 
+    // Check if already running (skip for child process)
+    if (!isChildProcess) {
+      const status = isServerRunning();
+      if (status.running) {
+        console.log(chalk.yellow(`\n⚠️  Server already running (PID: ${status.pid})`));
+        console.log(chalk.dim('Use "shared-things-server stop" to stop it first.\n'));
+        return;
+      }
+    }
+
+    // Detached mode: spawn new process in background
+    if (options.detach) {
+      ensureDataDir();
+
+      // Open log file for stdout/stderr
+      const logFd = fs.openSync(LOG_FILE, 'a');
+
+      // Find the CLI script path
+      const scriptPath = process.argv[1];
+
+      const child = spawn(process.execPath, [scriptPath, 'start', '--port', String(PORT), '--host', HOST], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        env: { ...process.env, SHARED_THINGS_DETACHED: '1' },
+      });
+
+      // Write PID file
+      fs.writeFileSync(PID_FILE, String(child.pid));
+
+      child.unref();
+      fs.closeSync(logFd);
+
+      console.log(chalk.green(`\n✅ Server started in background`));
+      console.log(`  ${chalk.dim('PID:')}  ${child.pid}`);
+      console.log(`  ${chalk.dim('URL:')}  http://${HOST}:${PORT}`);
+      console.log(`  ${chalk.dim('Logs:')} ${LOG_FILE}`);
+      console.log(chalk.dim('\nUse "shared-things-server logs -f" to follow logs'));
+      console.log(chalk.dim('Use "shared-things-server stop" to stop the server\n'));
+      return;
+    }
+
+    // Foreground mode
+    const db = initDatabase();
+
+    // In detached mode, use simple logger (no pino-pretty transport)
     const app = Fastify({
-      logger: true,
+      logger: isChildProcess ? true : true,
     });
 
     await app.register(cors, {
@@ -46,12 +122,119 @@ program
     app.addHook('preHandler', authMiddleware(db));
     registerRoutes(app, db);
 
+    // Handle graceful shutdown
+    const shutdown = async () => {
+      console.log(chalk.dim('\nShutting down...'));
+      await app.close();
+      if (fs.existsSync(PID_FILE)) {
+        fs.unlinkSync(PID_FILE);
+      }
+      process.exit(0);
+    };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+
     try {
       await app.listen({ port: PORT, host: HOST });
-      console.log(chalk.green(`\n✅ Server running at http://${HOST}:${PORT}\n`));
+      if (!process.env.SHARED_THINGS_DETACHED) {
+        console.log(chalk.green(`\n✅ Server running at http://${HOST}:${PORT}\n`));
+      }
     } catch (err) {
       app.log.error(err);
       process.exit(1);
+    }
+  });
+
+// =============================================================================
+// stop command
+// =============================================================================
+program
+  .command('stop')
+  .description('Stop the background server')
+  .action(() => {
+    const status = isServerRunning();
+
+    if (!status.running) {
+      console.log(chalk.yellow('\n⚠️  Server is not running.\n'));
+      return;
+    }
+
+    try {
+      process.kill(status.pid!, 'SIGTERM');
+      // Wait a bit for graceful shutdown
+      setTimeout(() => {
+        if (fs.existsSync(PID_FILE)) {
+          fs.unlinkSync(PID_FILE);
+        }
+      }, 500);
+      console.log(chalk.green(`\n✅ Server stopped (PID: ${status.pid})\n`));
+    } catch (err) {
+      console.log(chalk.red(`\n❌ Failed to stop server: ${err}\n`));
+    }
+  });
+
+// =============================================================================
+// status command
+// =============================================================================
+program
+  .command('status')
+  .description('Show server status')
+  .action(() => {
+    const status = isServerRunning();
+
+    console.log(chalk.bold('\n📊 Server Status\n'));
+
+    if (status.running) {
+      console.log(`  ${chalk.dim('Status:')} ${chalk.green('● running')}`);
+      console.log(`  ${chalk.dim('PID:')}    ${status.pid}`);
+    } else {
+      console.log(`  ${chalk.dim('Status:')} ${chalk.red('○ stopped')}`);
+    }
+
+    // Show log file info
+    if (fs.existsSync(LOG_FILE)) {
+      const stats = fs.statSync(LOG_FILE);
+      const sizeKB = Math.round(stats.size / 1024);
+      console.log(`  ${chalk.dim('Logs:')}   ${LOG_FILE} (${sizeKB}KB)`);
+    }
+
+    // Show database info
+    const dbPath = path.join(DATA_DIR, 'data.db');
+    if (fs.existsSync(dbPath)) {
+      const db = initDatabase();
+      const users = listUsers(db);
+      const todos = getAllTodos(db);
+      console.log(`  ${chalk.dim('Users:')}  ${users.length}`);
+      console.log(`  ${chalk.dim('Todos:')}  ${todos.length}`);
+    }
+
+    console.log();
+  });
+
+// =============================================================================
+// logs command
+// =============================================================================
+program
+  .command('logs')
+  .description('Show server logs')
+  .option('-f, --follow', 'Follow log output')
+  .option('-n, --lines <count>', 'Number of lines to show', '50')
+  .action((options) => {
+    if (!fs.existsSync(LOG_FILE)) {
+      console.log(chalk.yellow('\nNo logs yet.\n'));
+      return;
+    }
+
+    if (options.follow) {
+      console.log(chalk.dim(`Following ${LOG_FILE}... (Ctrl+C to stop)\n`));
+      const tail = spawn('tail', ['-f', LOG_FILE], { stdio: 'inherit' });
+      process.on('SIGINT', () => {
+        tail.kill();
+        process.exit(0);
+      });
+    } else {
+      const tail = spawn('tail', ['-n', options.lines, LOG_FILE], { stdio: 'inherit' });
+      tail.on('close', () => process.exit(0));
     }
   });
 
