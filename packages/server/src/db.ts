@@ -331,6 +331,21 @@ export function upsertTodoByServerId(
     // If serverId provided but not found, fall through to create
   }
 
+  // Check if todo with this thingsId already exists
+  const existingByThingsId = db.prepare(`SELECT id FROM todos WHERE things_id = ?`).get(data.thingsId) as { id: string } | undefined;
+
+  if (existingByThingsId) {
+    // Update existing todo found by thingsId
+    db.prepare(`
+      UPDATE todos
+      SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
+          heading_id = ?, position = ?, updated_at = ?, updated_by = ?
+      WHERE things_id = ?
+    `).run(data.title, data.notes, data.dueDate, tagsJson, data.status,
+      data.headingId, data.position, now, userId, data.thingsId);
+    return existingByThingsId.id;
+  }
+
   // Create new record
   const id = serverId || crypto.randomUUID();
   db.prepare(`

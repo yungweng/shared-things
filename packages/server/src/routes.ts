@@ -62,47 +62,60 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
   });
 
   // Push changes
-  app.post<{ Body: PushRequest }>('/push', async (request): Promise<PushResponse> => {
+  app.post<{ Body: PushRequest }>('/push', async (request, reply): Promise<PushResponse> => {
     const { headings, todos } = request.body;
     const userId = request.user.id;
     const conflicts: Conflict[] = [];
 
-    // Process heading deletions first
-    for (const thingsId of headings.deleted) {
-      deleteHeading(db, thingsId, userId);
-    }
-
-    // Process heading upserts
-    for (const heading of headings.upserted) {
-      upsertHeading(db, heading.thingsId, heading.title, heading.position, userId);
-    }
-
-    // Process todo deletions (by server ID)
-    for (const serverId of todos.deleted) {
-      deleteTodoByServerId(db, serverId, userId);
-    }
-
-    // Process todo upserts
-    for (const todo of todos.upserted) {
-      // Find heading ID if headingThingsId is provided
-      let headingId: string | null = null;
-      if (todo.headingId) {
-        // todo.headingId here is actually thingsId of the heading
-        const headingRow = db.prepare(`SELECT id FROM headings WHERE things_id = ?`).get(todo.headingId) as { id: string } | undefined;
-        headingId = headingRow?.id || null;
+    try {
+      // Process heading deletions first
+      for (const thingsId of headings.deleted) {
+        deleteHeading(db, thingsId, userId);
       }
 
-      // Use serverId for updates if provided, otherwise create new
-      upsertTodoByServerId(db, todo.serverId, {
-        thingsId: todo.thingsId,
-        title: todo.title,
-        notes: todo.notes,
-        dueDate: todo.dueDate,
-        tags: todo.tags,
-        status: todo.status,
-        headingId,
-        position: todo.position,
-      }, userId);
+      // Process heading upserts
+      for (const heading of headings.upserted) {
+        upsertHeading(db, heading.thingsId, heading.title, heading.position, userId);
+      }
+
+      // Process todo deletions (by server ID)
+      for (const serverId of todos.deleted) {
+        deleteTodoByServerId(db, serverId, userId);
+      }
+
+      // Process todo upserts
+      for (const todo of todos.upserted) {
+        // Find heading ID if headingThingsId is provided
+        let headingId: string | null = null;
+        if (todo.headingId) {
+          // todo.headingId here is actually thingsId of the heading
+          const headingRow = db.prepare(`SELECT id FROM headings WHERE things_id = ?`).get(todo.headingId) as { id: string } | undefined;
+          headingId = headingRow?.id || null;
+        }
+
+        // Use serverId for updates if provided, otherwise create new
+        upsertTodoByServerId(db, todo.serverId, {
+          thingsId: todo.thingsId,
+          title: todo.title,
+          notes: todo.notes,
+          dueDate: todo.dueDate,
+          tags: todo.tags,
+          status: todo.status,
+          headingId,
+          position: todo.position,
+        }, userId);
+      }
+    } catch (err) {
+      const error = err as Error;
+      // Check for UNIQUE constraint violation
+      if (error.message?.includes('UNIQUE constraint failed')) {
+        reply.status(409);
+        return {
+          error: 'Sync conflict: Server has data that conflicts with your local state. Run "shared-things reset --server" to start fresh.',
+          code: 'SYNC_CONFLICT',
+        } as any;
+      }
+      throw err;
     }
 
     // Return current state

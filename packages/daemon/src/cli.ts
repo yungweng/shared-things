@@ -8,7 +8,7 @@ import { input, select, password, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import updateNotifier from 'update-notifier';
 import { loadConfig, saveConfig, configExists, ensureConfigDir, getConfigDir } from './config.js';
-import { listProjects, projectExists, isThingsRunning } from './things.js';
+import { listProjects, projectExists, isThingsRunning, getTodosFromProject } from './things.js';
 import { ApiClient } from './api.js';
 import { runSync } from './sync.js';
 import { installLaunchAgent, uninstallLaunchAgent, getLaunchAgentStatus } from './launchagent.js';
@@ -79,14 +79,24 @@ program
       validate: (value) => value ? true : 'API key is required',
     });
 
-    // Verify connection
+    // Verify connection and API key
     console.log('\n⏳ Verifying connection...');
     const api = new ApiClient(serverUrl, apiKey);
     try {
       await api.health();
-      console.log('✅ Connection successful!\n');
+      console.log('✅ Server reachable');
     } catch (error) {
-      console.error(`❌ Failed to connect: ${error}`);
+      console.error(`❌ Failed to connect to server: ${error}`);
+      process.exit(1);
+    }
+
+    // Verify API key by calling an authenticated endpoint
+    console.log('⏳ Verifying API key...');
+    try {
+      await api.getState();
+      console.log('✅ API key valid!\n');
+    } catch (error) {
+      console.error(`❌ Invalid API key: ${error}`);
       process.exit(1);
     }
 
@@ -102,8 +112,13 @@ program
       choices: projects.map(p => ({ name: p, value: p })),
     });
 
+    // Verify project access
+    console.log('\n⏳ Checking Things project...');
+    const todos = getTodosFromProject(projectName);
+    console.log(`✅ Found ${todos.length} todo${todos.length === 1 ? '' : 's'} in "${projectName}"\n`);
+
     // Step 4: Things Auth Token
-    console.log('\n📋 Find your Things Auth Token in:');
+    console.log('📋 Find your Things Auth Token in:');
     console.log('   Things → Settings → General → Things URLs → Manage\n');
 
     const thingsAuthToken = await password({
@@ -111,6 +126,8 @@ program
       mask: '*',
       validate: (value) => value ? true : 'Auth token is required for updating tasks',
     });
+
+    console.log(chalk.yellow('\n⚠️  Auth token will be verified on first sync.\n'));
 
     // Save config
     saveConfig({
