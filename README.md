@@ -51,8 +51,10 @@ shared-things init
 ? Server URL: https://things.yourdomain.com
 ? API Key: ****
 ? Project name in Things: Shared Project
-? Things auth token (optional):
+? Things auth token: ****
 ```
+
+> **Things auth token:** Required for syncing updates to existing todos. Find it in Things → Settings → General → Things URLs → Enable Things URLs.
 
 ### After Setup
 
