@@ -1,6 +1,6 @@
 {
   "name": "shared-things-daemon",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Sync Things 3 projects between multiple macOS users",
   "type": "module",
   "main": "./dist/cli.js",
@@ -8,7 +8,8 @@
     "shared-things": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup",
