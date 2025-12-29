@@ -15,6 +15,8 @@ const STATE_FILE = path.join(getConfigDir(), 'state.json');
 interface LocalState {
   lastSyncedAt: string;
   todos: Map<string, ThingsTodo>; // thingsId -> todo
+  /** Maps server ID to local thingsId (critical for cross-device sync) */
+  serverIdToThingsId: Map<string, string>;
 }
 
 function loadLocalState(): LocalState {
@@ -22,6 +24,7 @@ function loadLocalState(): LocalState {
     return {
       lastSyncedAt: new Date(0).toISOString(),
       todos: new Map(),
+      serverIdToThingsId: new Map(),
     };
   }
 
@@ -31,11 +34,13 @@ function loadLocalState(): LocalState {
     return {
       lastSyncedAt: data.lastSyncedAt,
       todos: new Map(Object.entries(data.todos || {})),
+      serverIdToThingsId: new Map(Object.entries(data.serverIdToThingsId || {})),
     };
   } catch {
     return {
       lastSyncedAt: new Date(0).toISOString(),
       todos: new Map(),
+      serverIdToThingsId: new Map(),
     };
   }
 }
@@ -44,6 +49,7 @@ function saveLocalState(state: LocalState): void {
   const data = {
     lastSyncedAt: state.lastSyncedAt,
     todos: Object.fromEntries(state.todos),
+    serverIdToThingsId: Object.fromEntries(state.serverIdToThingsId),
   };
   fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
 }
@@ -85,6 +91,12 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
     }
   }
 
+  // Build reverse mapping: thingsId -> serverId
+  const thingsIdToServerId = new Map<string, string>();
+  for (const [serverId, thingsId] of localState.serverIdToThingsId) {
+    thingsIdToServerId.set(thingsId, serverId);
+  }
+
   // 3. Push local changes to server
   let pushed = 0;
   if (localChanges.upserted.length > 0 || localChanges.deleted.length > 0) {
@@ -92,6 +104,8 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
       headings: { upserted: [], deleted: [] },
       todos: {
         upserted: localChanges.upserted.map((t, idx) => ({
+          // Include serverId if we know it (for updates)
+          serverId: thingsIdToServerId.get(t.thingsId),
           thingsId: t.thingsId,
           title: t.title,
           notes: t.notes,
@@ -101,13 +115,26 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
           headingId: t.headingThingsId,
           position: idx,
         })),
-        deleted: localChanges.deleted,
+        // Convert thingsIds to serverIds for deletions
+        deleted: localChanges.deleted
+          .map(thingsId => thingsIdToServerId.get(thingsId))
+          .filter((id): id is string => id !== undefined),
       },
       lastSyncedAt: localState.lastSyncedAt,
     };
 
-    await api.push(pushRequest);
+    const pushResponse = await api.push(pushRequest);
     pushed = localChanges.upserted.length + localChanges.deleted.length;
+
+    // Record server ID mappings for all todos in the response
+    // This handles both our pushed todos and existing server todos
+    for (const serverTodo of pushResponse.state.todos) {
+      // Check if we have this todo locally (by matching thingsId)
+      const localTodo = currentTodosMap.get(serverTodo.thingsId);
+      if (localTodo) {
+        localState.serverIdToThingsId.set(serverTodo.id, localTodo.thingsId);
+      }
+    }
   }
 
   // 4. Pull remote changes
@@ -116,16 +143,53 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
 
   // Apply remote todo changes to Things
   for (const remoteTodo of delta.todos.upserted) {
-    const localTodo = currentTodosMap.get(remoteTodo.thingsId);
+    // Look up by SERVER ID, not thingsId!
+    const localThingsId = localState.serverIdToThingsId.get(remoteTodo.id);
+    const localTodo = localThingsId ? currentTodosMap.get(localThingsId) : null;
 
     if (!localTodo) {
       // New todo from server - create locally
+      // First, get current todos to detect the new one after creation
+      const beforeTodos = new Set(currentTodosMap.keys());
+
       createTodo(config.projectName, {
         title: remoteTodo.title,
         notes: remoteTodo.notes,
         dueDate: remoteTodo.dueDate || undefined,
         tags: remoteTodo.tags,
       });
+
+      // Wait for Things to process the URL scheme (with retry)
+      let newTodo: ThingsTodo | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Re-read todos to find the new one
+        const afterTodos = getTodosFromProject(config.projectName);
+
+        // Match by title AND not being in beforeTodos (more reliable)
+        newTodo = afterTodos.find(t =>
+          !beforeTodos.has(t.thingsId) &&
+          t.title === remoteTodo.title
+        );
+
+        // Fallback: any new todo if title match fails
+        if (!newTodo) {
+          newTodo = afterTodos.find(t => !beforeTodos.has(t.thingsId));
+        }
+
+        if (newTodo) break;
+      }
+
+      if (newTodo) {
+        // Record the mapping: serverId -> local thingsId
+        localState.serverIdToThingsId.set(remoteTodo.id, newTodo.thingsId);
+        currentTodosMap.set(newTodo.thingsId, newTodo);
+        console.log(`Mapped server ${remoteTodo.id} -> local ${newTodo.thingsId}`);
+      } else {
+        console.warn(`Failed to find newly created todo for server ${remoteTodo.id} (${remoteTodo.title})`);
+      }
+
       pulled++;
     } else if (hasRemoteChanged(localTodo, remoteTodo)) {
       // Remote changed - update locally

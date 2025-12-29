@@ -89,15 +89,30 @@ export interface SyncDelta {
   syncedAt: string;
 }
 
+/** Todo data for push request - includes optional serverId for updates */
+export interface PushTodo {
+  /** Server ID (include for updates, omit for new items) */
+  serverId?: string;
+  /** Local Things ID */
+  thingsId: string;
+  title: string;
+  notes: string;
+  dueDate: string | null;
+  tags: string[];
+  status: 'open' | 'completed' | 'canceled';
+  headingId: string | null;
+  position: number;
+}
+
 /** Request to push local changes */
 export interface PushRequest {
   headings: {
     upserted: Omit<Heading, 'id' | 'updatedAt' | 'updatedBy' | 'createdAt'>[];
-    deleted: string[]; // thingsIds
+    deleted: string[]; // server IDs
   };
   todos: {
-    upserted: Omit<Todo, 'id' | 'updatedAt' | 'updatedBy' | 'createdAt'>[];
-    deleted: string[]; // thingsIds
+    upserted: PushTodo[];
+    deleted: string[]; // server IDs
   };
   /** Client's last known sync timestamp */
   lastSyncedAt: string;
