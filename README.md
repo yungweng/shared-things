@@ -13,7 +13,7 @@ flowchart LR
 ## How It Works
 
 1. Each user runs a local **daemon** that polls Things every 30 seconds
-2. Changes are pushed to a central **server** (your own Hetzner VPS)
+2. Changes are pushed to a central **server** (your own VPS or local machine)
 3. Other users pull changes and apply them locally via Things URL Scheme
 4. Server is the **single source of truth** - last write wins on conflicts
 
@@ -27,74 +27,114 @@ Not synced:
 - Checklist items (kept local)
 - Areas (project must exist in both Things apps)
 
-## Architecture
-
-```
-shared-things/
-├── packages/
-│   ├── common/      # Shared types & validation
-│   ├── server/      # REST API + SQLite (runs on Hetzner)
-│   └── daemon/      # macOS client (runs locally)
-└── package.json     # pnpm workspace root
-```
-
 ## Quick Start
 
-### 1. Clone & Build
+### Server Setup (one person hosts)
 
 ```bash
-git clone https://github.com/moto-nrw/shared-things.git
-cd shared-things
-pnpm install
-pnpm build
-```
-
-### 2. Server (one person hosts)
-
-```bash
-cd packages/server
+# Install
+npm install -g shared-things-server
 
 # Create users
-node dist/cli.js create-user --name "yonnock"
-node dist/cli.js create-user --name "florian"
-# → Save the API keys!
+shared-things-server create-user
+# Interactive prompt for username, returns API key
 
-# Local testing
-PORT=3333 node dist/index.js
-
-# Production (systemd) - see Server Deployment below
+# Start server
+shared-things-server start --port 3334
 ```
 
-## Server Deployment (Production)
+For production, use a process manager like systemd or pm2.
+
+### Client Setup (each user)
 
 ```bash
-# On your server
-cd /opt
-git clone https://github.com/moto-nrw/shared-things.git
-cd shared-things
-pnpm install
-pnpm build
+# Install
+npm install -g shared-things-daemon
 
-# Create users
-cd packages/server
-node dist/cli.js create-user --name "yonnock"
-node dist/cli.js create-user --name "florian"
+# Configure
+shared-things init
+# Interactive setup wizard:
+# → Server URL: https://your-server.com (or http://localhost:3334)
+# → API Key: <your key from server setup>
+# → Project: <Things project to sync>
+# → Things Token: <from Things → Settings → General → Things URLs>
 
-# Install systemd service
-sudo cp systemd/shared-things.service /etc/systemd/system/
+# Start daemon (auto-starts on login)
+shared-things install
+```
+
+### Updating
+
+```bash
+npm update -g shared-things-daemon
+npm update -g shared-things-server
+```
+
+## Client Commands
+
+| Command | Description |
+|---------|-------------|
+| `shared-things init` | Setup wizard |
+| `shared-things install` | Install launchd daemon (auto-starts on login) |
+| `shared-things uninstall` | Remove launchd daemon |
+| `shared-things status` | Show sync status & last sync time |
+| `shared-things sync` | Force immediate one-time sync |
+| `shared-things logs [-f]` | Show daemon logs |
+| `shared-things reset [--server]` | Reset sync state (--server also clears server data) |
+| `shared-things purge` | Remove all local config and data |
+
+## Server Commands
+
+| Command | Description |
+|---------|-------------|
+| `shared-things-server start` | Start the sync server |
+| `shared-things-server create-user` | Create user and generate API key |
+| `shared-things-server list-users` | List all users |
+| `shared-things-server delete-user` | Delete a user and their data |
+
+## Server Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check (no auth required) |
+| `GET /state` | Get full project state |
+| `GET /delta?since=<timestamp>` | Get changes since timestamp |
+| `POST /push` | Push local changes |
+| `DELETE /reset` | Delete all user data |
+
+All endpoints except `/health` require `Authorization: Bearer <api-key>` header.
+
+## Production Deployment
+
+### Server with systemd
+
+```bash
+# Install globally
+npm install -g shared-things-server
+
+# Create systemd service
+sudo tee /etc/systemd/system/shared-things.service << EOF
+[Unit]
+Description=shared-things sync server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+ExecStart=/usr/bin/shared-things-server start --port 3334
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
 sudo systemctl daemon-reload
 sudo systemctl enable shared-things
 sudo systemctl start shared-things
-
-# Check status
-sudo systemctl status shared-things
-sudo journalctl -u shared-things -f   # Follow logs
-
-# Deploy updates
-./deploy.sh
 ```
 
-### Caddy (HTTPS)
+### HTTPS with Caddy
 
 Add to `/etc/caddy/Caddyfile`:
 
@@ -106,58 +146,9 @@ things.yourdomain.com {
 
 Then `sudo systemctl reload caddy`.
 
-### 3. Client (each user)
-
-```bash
-cd packages/daemon
-pnpm link --global
-
-shared-things init
-# → Server URL: http://localhost:3333 (or https://your-server.com)
-# → API Key: <your key from step 2>
-# → Project: <Things project to sync>
-# → Things Token: <from Things → Settings → General → Things URLs>
-
-shared-things install   # Auto-starts on login
-```
-
-### Updating
-
-After pulling changes:
-
-```bash
-git pull && pnpm build
-launchctl kickstart -k gui/$(id -u)/com.shared-things.daemon
-```
-
-This restarts the daemon to load the new code. Full reinstall (`uninstall && install`) is only needed if the LaunchAgent plist itself changed.
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `init` | Setup wizard (server URL, API key, project, Things token) |
-| `install` | Install launchd daemon (auto-starts on Mac login) |
-| `uninstall` | Remove launchd daemon |
-| `status` | Show sync status & last sync time |
-| `sync` | Force immediate one-time sync |
-| `logs` | Show daemon logs (`-f` to follow) |
-| `daemon` | Run sync loop (used internally by launchd) |
-
-## Server Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check (no auth required) |
-| `GET /state` | Get full project state |
-| `GET /delta?since=<timestamp>` | Get changes since timestamp |
-| `POST /push` | Push local changes |
-
-All endpoints except `/health` require `Authorization: Bearer <api-key>` header.
-
 ## Configuration
 
-Config is stored in `~/.shared-things/config.json`:
+Client config is stored in `~/.shared-things/config.json`:
 
 ```json
 {
@@ -169,35 +160,24 @@ Config is stored in `~/.shared-things/config.json`:
 }
 ```
 
-## Useful Commands
-
-### Client (macOS)
-
-```bash
-shared-things status    # Check daemon status & last sync
-shared-things sync      # Force immediate sync
-shared-things logs -f   # Follow daemon logs
-```
-
-### Server
-
-```bash
-sudo systemctl status shared-things     # Service status
-sudo journalctl -u shared-things -f     # Follow logs
-./deploy.sh                             # Deploy after git pull
-sqlite3 ~/.shared-things-server/data.db # Inspect database
-```
+Server data is stored in `~/.shared-things-server/data.db` (SQLite).
 
 ## Requirements
 
-- **Server:** Linux/macOS, Node.js 20+
+- **Server:** Linux/macOS, Node.js 18+
 - **Client:** macOS, Things 3, Node.js 18+
 - **Things:** URL Scheme must be enabled (Settings → General → Things URLs)
 
-## Documentation
+## Architecture
 
-- [Server Deployment](docs/DEPLOYMENT.md) - Hetzner VPS setup with Caddy & systemd
-- [Client Setup](docs/CLIENT.md) - macOS daemon installation & troubleshooting
+```
+shared-things/
+├── packages/
+│   ├── common/      # Shared types & validation
+│   ├── server/      # REST API + SQLite
+│   └── daemon/      # macOS client
+└── package.json     # pnpm workspace root
+```
 
 ## Security
 
