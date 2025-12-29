@@ -126,10 +126,11 @@ shared-things install   # Auto-starts on login
 After pulling changes:
 
 ```bash
-pnpm build
-shared-things uninstall
-shared-things install
+git pull && pnpm build
+launchctl kickstart -k gui/$(id -u)/com.shared-things.daemon
 ```
+
+This restarts the daemon to load the new code. Full reinstall (`uninstall && install`) is only needed if the LaunchAgent plist itself changed.
 
 ## Commands
 
