@@ -83,7 +83,17 @@ export function initDatabase(): DB {
 // User queries
 // =============================================================================
 
+export function userExists(db: DB, name: string): boolean {
+  const row = db.prepare(`SELECT 1 FROM users WHERE name = ?`).get(name);
+  return !!row;
+}
+
 export function createUser(db: DB, name: string): { id: string; apiKey: string } {
+  // Check for duplicate username
+  if (userExists(db, name)) {
+    throw new Error(`User "${name}" already exists`);
+  }
+
   const id = crypto.randomUUID();
   const apiKey = crypto.randomBytes(32).toString('hex');
   const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
@@ -321,6 +331,21 @@ export function upsertTodoByServerId(
     // If serverId provided but not found, fall through to create
   }
 
+  // Check if todo with this thingsId already exists
+  const existingByThingsId = db.prepare(`SELECT id FROM todos WHERE things_id = ?`).get(data.thingsId) as { id: string } | undefined;
+
+  if (existingByThingsId) {
+    // Update existing todo found by thingsId
+    db.prepare(`
+      UPDATE todos
+      SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
+          heading_id = ?, position = ?, updated_at = ?, updated_by = ?
+      WHERE things_id = ?
+    `).run(data.title, data.notes, data.dueDate, tagsJson, data.status,
+      data.headingId, data.position, now, userId, data.thingsId);
+    return existingByThingsId.id;
+  }
+
   // Create new record
   const id = serverId || crypto.randomUUID();
   db.prepare(`
@@ -372,5 +397,29 @@ export function getDeletedSince(db: DB, since: string): { todos: string[]; headi
   return {
     todos: rows.filter(r => r.item_type === 'todo').map(r => r.things_id),
     headings: rows.filter(r => r.item_type === 'heading').map(r => r.things_id),
+  };
+}
+
+// =============================================================================
+// Reset user data
+// =============================================================================
+
+/**
+ * Delete all data created/updated by a user
+ * Used for clean reset when client wants to start fresh
+ */
+export function resetUserData(db: DB, userId: string): { deletedTodos: number; deletedHeadings: number } {
+  // Delete all todos updated by this user
+  const todoResult = db.prepare(`DELETE FROM todos WHERE updated_by = ?`).run(userId);
+
+  // Delete all headings updated by this user
+  const headingResult = db.prepare(`DELETE FROM headings WHERE updated_by = ?`).run(userId);
+
+  // Clear deleted_items tracking for this user
+  db.prepare(`DELETE FROM deleted_items WHERE deleted_by = ?`).run(userId);
+
+  return {
+    deletedTodos: todoResult.changes,
+    deletedHeadings: headingResult.changes,
   };
 }

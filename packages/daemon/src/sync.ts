@@ -6,6 +6,7 @@ import type { ProjectState, Todo, Heading } from '@shared-things/common';
 import { ApiClient } from './api.js';
 import { getTodosFromProject, createTodo, updateTodo, type ThingsTodo } from './things.js';
 import { loadConfig, saveConfig } from './config.js';
+import { log, logError, logSync, logMapping, logTodoCreated, logTodoUpdated } from './logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfigDir } from './config.js';
@@ -54,7 +55,7 @@ function saveLocalState(state: LocalState): void {
   fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
 }
 
-export async function runSync(): Promise<{ pushed: number; pulled: number }> {
+export async function runSync(): Promise<{ pushed: number; pulled: number; isFirstSync: boolean }> {
   const config = loadConfig();
   if (!config) {
     throw new Error('Not configured. Run "shared-things init" first.');
@@ -62,6 +63,7 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
 
   const api = new ApiClient(config.serverUrl, config.apiKey);
   const localState = loadLocalState();
+  const isFirstSync = localState.lastSyncedAt === new Date(0).toISOString();
 
   // 1. Read current Things state
   const currentTodos = getTodosFromProject(config.projectName);
@@ -158,6 +160,7 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
         dueDate: remoteTodo.dueDate || undefined,
         tags: remoteTodo.tags,
       });
+      logTodoCreated(remoteTodo.title);
 
       // Wait for Things to process the URL scheme (with retry)
       let newTodo: ThingsTodo | undefined;
@@ -185,9 +188,9 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
         // Record the mapping: serverId -> local thingsId
         localState.serverIdToThingsId.set(remoteTodo.id, newTodo.thingsId);
         currentTodosMap.set(newTodo.thingsId, newTodo);
-        console.log(`Mapped server ${remoteTodo.id} -> local ${newTodo.thingsId}`);
+        logMapping(remoteTodo.id, newTodo.thingsId);
       } else {
-        console.warn(`Failed to find newly created todo for server ${remoteTodo.id} (${remoteTodo.title})`);
+        logError(`Failed to find newly created todo for server ${remoteTodo.id}`, remoteTodo.title);
       }
 
       pulled++;
@@ -200,6 +203,7 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
         completed: remoteTodo.status === 'completed',
         canceled: remoteTodo.status === 'canceled',
       });
+      logTodoUpdated(localTodo.thingsId, remoteTodo.title);
       pulled++;
     }
   }
@@ -207,7 +211,7 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
   // Note: Deleting todos in Things via automation is limited
   // We can log deletions but not execute them automatically
   if (delta.todos.deleted.length > 0) {
-    console.log(`Remote deletions (manual action needed): ${delta.todos.deleted.join(', ')}`);
+    log(`Remote deletions (manual action needed): ${delta.todos.deleted.join(', ')}`);
   }
 
   // 5. Update local state
@@ -215,7 +219,10 @@ export async function runSync(): Promise<{ pushed: number; pulled: number }> {
   localState.todos = currentTodosMap;
   saveLocalState(localState);
 
-  return { pushed, pulled };
+  // Log sync summary
+  logSync(pushed, pulled, isFirstSync);
+
+  return { pushed, pulled, isFirstSync };
 }
 
 function hasChanged(prev: ThingsTodo, curr: ThingsTodo): boolean {
