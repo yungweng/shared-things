@@ -124,7 +124,8 @@ export function createTodo(projectName: string, todo: {
 
   // URLSearchParams encodes spaces as '+', but Things expects '%20'
   const url = `things:///add?${params.toString().replace(/\+/g, '%20')}`;
-  execSync(`open "${url}"`);
+  // -g flag opens in background without stealing focus
+  execSync(`open -g "${url}"`);
 }
 
 /**
@@ -149,7 +150,8 @@ export function updateTodo(authToken: string, thingsId: string, updates: {
 
   // URLSearchParams encodes spaces as '+', but Things expects '%20'
   const url = `things:///update?${params.toString().replace(/\+/g, '%20')}`;
-  execSync(`open "${url}"`);
+  // -g flag opens in background without stealing focus
+  execSync(`open -g "${url}"`);
 }
 
 /**
