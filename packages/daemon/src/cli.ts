@@ -26,7 +26,7 @@ const program = new Command();
 program
   .name('shared-things')
   .description('Sync a Things 3 project between multiple users')
-  .version('0.1.0');
+  .version(pkg.version);
 
 // =============================================================================
 // init command

@@ -1,6 +1,6 @@
 {
   "name": "shared-things-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sync server for Things 3 projects",
   "type": "module",
   "main": "./dist/index.js",

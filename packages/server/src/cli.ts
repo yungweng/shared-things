@@ -16,6 +16,9 @@ import cors from '@fastify/cors';
 import { authMiddleware } from './auth.js';
 import { registerRoutes } from './routes.js';
 
+// Read version from package.json
+const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
+
 // Data directory for server files
 const DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), '.shared-things-server');
 const PID_FILE = path.join(DATA_DIR, 'server.pid');
@@ -50,7 +53,7 @@ const program = new Command();
 program
   .name('shared-things-server')
   .description('Sync server for Things 3 projects')
-  .version('0.1.0');
+  .version(pkg.version);
 
 // =============================================================================
 // start command
