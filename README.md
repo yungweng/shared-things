@@ -39,11 +39,17 @@ npm install -g shared-things-server
 shared-things-server create-user
 # Interactive prompt for username, returns API key
 
-# Start server
+# Start server (foreground)
 shared-things-server start --port 3334
+
+# Or start in background (like docker compose up -d)
+shared-things-server start -d --port 3334
+shared-things-server status   # Check if running
+shared-things-server logs -f  # Follow logs
+shared-things-server stop     # Stop server
 ```
 
-For production, use a process manager like systemd or pm2.
+For production, use systemd (see below) or the built-in background mode.
 
 ### Client Setup (each user)
 
@@ -87,11 +93,14 @@ npm update -g shared-things-server
 
 | Command | Description |
 |---------|-------------|
-| `shared-things-server start` | Start the sync server |
+| `shared-things-server start [-d] [-p port]` | Start server (use -d for background/detached mode) |
+| `shared-things-server stop` | Stop background server |
+| `shared-things-server status` | Show server status (running, PID, users, todos) |
+| `shared-things-server logs [-f]` | Show server logs (-f to follow) |
 | `shared-things-server create-user` | Create user and generate API key |
 | `shared-things-server list-users` | List all users |
 | `shared-things-server delete-user` | Delete a user and their data |
-| `shared-things-server list-todos` | List all todos (--user to filter) |
+| `shared-things-server list-todos [-u user]` | List all todos (--user to filter) |
 | `shared-things-server reset` | Delete all todos/headings (keeps users) |
 | `shared-things-server purge` | Delete entire database |
 
