@@ -9,7 +9,7 @@ export default defineConfig({
   // Bundle @shared-things/common into the output
   noExternal: ["@shared-things/common"],
   // Don't bundle these - they're runtime dependencies
-  external: ["commander", "@inquirer/prompts"],
+  external: ["commander", "@inquirer/prompts", "chalk", "update-notifier"],
   dts: false,
   sourcemap: false,
   minify: false,

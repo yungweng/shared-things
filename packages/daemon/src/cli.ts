@@ -5,6 +5,8 @@
 
 import { Command } from 'commander';
 import { input, select, password } from '@inquirer/prompts';
+import chalk from 'chalk';
+import updateNotifier from 'update-notifier';
 import { loadConfig, saveConfig, configExists, ensureConfigDir, getConfigDir } from './config.js';
 import { listProjects, projectExists, isThingsRunning } from './things.js';
 import { ApiClient } from './api.js';
@@ -12,6 +14,10 @@ import { runSync } from './sync.js';
 import { installLaunchAgent, uninstallLaunchAgent, getLaunchAgentStatus } from './launchagent.js';
 import * as fs from 'fs';
 import * as path from 'path';
+
+// Check for updates
+const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
+updateNotifier({ pkg }).notify();
 
 const program = new Command();
 
@@ -134,27 +140,43 @@ program
   .description('Show sync status')
   .action(() => {
     if (!configExists()) {
-      console.log('Status: Not configured');
-      console.log('Run "shared-things init" to get started.');
+      console.log(chalk.yellow('⚠️  Not configured'));
+      console.log(chalk.dim('Run "shared-things init" to get started.'));
       return;
     }
 
     const config = loadConfig()!;
     const daemonStatus = getLaunchAgentStatus();
+    const isRunning = daemonStatus === 'running';
 
-    console.log('shared-things Status\n');
-    console.log(`Server:    ${config.serverUrl}`);
-    console.log(`Project:   ${config.projectName}`);
-    console.log(`Interval:  ${config.pollInterval}s`);
-    console.log(`Daemon:    ${daemonStatus}`);
+    console.log(chalk.bold('\n📊 shared-things Status\n'));
+    console.log(`${chalk.dim('Server:')}    ${chalk.cyan(config.serverUrl)}`);
+    console.log(`${chalk.dim('Project:')}   ${chalk.white(config.projectName)}`);
+    console.log(`${chalk.dim('Interval:')}  ${config.pollInterval}s`);
+    console.log(`${chalk.dim('Daemon:')}    ${isRunning ? chalk.green('● running') : chalk.red('○ stopped')}`);
 
     // Show last sync time
     const statePath = path.join(getConfigDir(), 'state.json');
     if (fs.existsSync(statePath)) {
       const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-      console.log(`Last sync: ${state.lastSyncedAt}`);
+      const lastSync = new Date(state.lastSyncedAt);
+      const ago = formatTimeAgo(lastSync);
+      console.log(`${chalk.dim('Last sync:')} ${ago}`);
     }
+    console.log();
   });
+
+// Helper to format relative time
+function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 // =============================================================================
 // sync command
