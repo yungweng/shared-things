@@ -4,7 +4,7 @@
  */
 
 import { Command } from 'commander';
-import * as readline from 'readline';
+import { input, select, password } from '@inquirer/prompts';
 import { loadConfig, saveConfig, configExists, ensureConfigDir, getConfigDir } from './config.js';
 import { listProjects, projectExists, isThingsRunning } from './things.js';
 import { ApiClient } from './api.js';
@@ -27,75 +27,65 @@ program
   .command('init')
   .description('Setup wizard')
   .action(async () => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    const ask = (question: string): Promise<string> =>
-      new Promise(resolve => rl.question(question, resolve));
-
-    console.log('shared-things Setup\n');
+    console.log('\n🔄 shared-things Setup\n');
 
     // Check Things
     if (!isThingsRunning()) {
-      console.log('Note: Things 3 is not running. Please start it first.\n');
+      console.log('⚠️  Things 3 is not running. Please start it first.\n');
     }
 
-    // Server URL
-    const serverUrl = await ask('Server URL (e.g., https://things.example.com): ');
-    if (!serverUrl) {
-      console.error('Server URL is required.');
-      rl.close();
-      process.exit(1);
-    }
+    // Step 1: Server URL
+    const serverUrl = await input({
+      message: 'Server URL',
+      default: 'https://things.example.com',
+      validate: (value) => {
+        if (!value) return 'Server URL is required';
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return 'URL must start with http:// or https://';
+        }
+        return true;
+      },
+    });
 
-    // API Key
-    const apiKey = await ask('Your API key: ');
-    if (!apiKey) {
-      console.error('API key is required.');
-      rl.close();
-      process.exit(1);
-    }
+    // Step 2: API Key
+    const apiKey = await password({
+      message: 'API Key',
+      mask: '*',
+      validate: (value) => value ? true : 'API key is required',
+    });
 
     // Verify connection
-    console.log('\nVerifying connection...');
+    console.log('\n⏳ Verifying connection...');
     const api = new ApiClient(serverUrl, apiKey);
     try {
       await api.health();
-      console.log('Connection successful!');
+      console.log('✅ Connection successful!\n');
     } catch (error) {
-      console.error(`Failed to connect: ${error}`);
-      rl.close();
+      console.error(`❌ Failed to connect: ${error}`);
       process.exit(1);
     }
 
-    // List projects
-    console.log('\nAvailable Things projects:');
+    // Step 3: Select Things project
     const projects = listProjects();
     if (projects.length === 0) {
-      console.log('  (no projects found)');
-    } else {
-      projects.forEach((p, i) => console.log(`  ${i + 1}. ${p}`));
-    }
-
-    const projectName = await ask('\nProject to sync: ');
-    if (!projectExists(projectName)) {
-      console.error(`Project "${projectName}" not found in Things.`);
-      rl.close();
+      console.error('❌ No Things projects found. Create a project in Things first.');
       process.exit(1);
     }
 
-    // Things Auth Token
-    console.log('\nStep 4: Things Auth Token');
-    console.log('─────────────────────────');
-    console.log('Find it in: Things → Settings → General → Things URLs → Manage\n');
-    const thingsAuthToken = await ask('Things Auth Token: ');
-    if (!thingsAuthToken) {
-      console.error('Things auth token is required for updating tasks.');
-      rl.close();
-      process.exit(1);
-    }
+    const projectName = await select({
+      message: 'Things project to sync',
+      choices: projects.map(p => ({ name: p, value: p })),
+    });
+
+    // Step 4: Things Auth Token
+    console.log('\n📋 Find your Things Auth Token in:');
+    console.log('   Things → Settings → General → Things URLs → Manage\n');
+
+    const thingsAuthToken = await password({
+      message: 'Things Auth Token',
+      mask: '*',
+      validate: (value) => value ? true : 'Auth token is required for updating tasks',
+    });
 
     // Save config
     saveConfig({
@@ -106,12 +96,10 @@ program
       thingsAuthToken,
     });
 
-    console.log('\nConfiguration saved!');
-    console.log(`\nNext steps:`);
+    console.log('\n✅ Configuration saved!\n');
+    console.log('Next steps:');
     console.log('  1. Run "shared-things install" to start the daemon');
-    console.log('  2. Or run "shared-things sync" for a one-time sync');
-
-    rl.close();
+    console.log('  2. Or run "shared-things sync" for a one-time sync\n');
   });
 
 // =============================================================================
