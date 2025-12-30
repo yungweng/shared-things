@@ -72,6 +72,23 @@ All except `/health` require `Authorization: Bearer <api-key>` header.
 - **Client:** `~/.shared-things/config.json`, `~/.shared-things/state.json`
 - **LaunchAgent:** `~/Library/LaunchAgents/com.shared-things.daemon.plist`
 
+## Publishing
+
+```bash
+# 1. Bump versions
+pnpm --filter shared-things-daemon exec npm version patch  # or minor/major
+pnpm --filter shared-things-server exec npm version patch
+
+# 2. Commit and push
+git add -A && git commit -m "chore: bump to vX.Y.Z" && git push
+
+# 3. Tag and release (triggers CD pipeline)
+git tag vX.Y.Z && git push origin vX.Y.Z
+gh release create vX.Y.Z --generate-notes
+```
+
+Publishing is automated via GitHub Actions with OIDC trusted publishing (no npm tokens).
+
 ## Limitations
 
 - Things URL Scheme can create todos but has limited update capabilities (requires auth token)
