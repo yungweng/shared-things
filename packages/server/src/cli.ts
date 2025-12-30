@@ -6,6 +6,7 @@
 import { Command } from 'commander';
 import { input, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
+import updateNotifier from 'update-notifier';
 import { initDatabase, createUser, listUsers, userExists, getAllTodos, getAllHeadings, type DB } from './db.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -18,6 +19,52 @@ import { registerRoutes } from './routes.js';
 
 // Read version from package.json
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
+
+// Check for updates
+const updateCheckInterval = 1000 * 60 * 60; // 1 hour
+const notifier = updateNotifier({ pkg, updateCheckInterval });
+
+// Validate cached update against current version (user may have upgraded)
+if (notifier.update) {
+  notifier.update.current = pkg.version;
+  if (notifier.update.current === notifier.update.latest) {
+    notifier.update = undefined;
+  }
+}
+
+// Detect first run and fetch immediately if needed
+const lastCheck = (notifier.config?.get('lastUpdateCheck') as number) ?? 0;
+const isFirstRun = Date.now() - lastCheck < 1000;
+const intervalPassed = Date.now() - lastCheck >= updateCheckInterval;
+
+if (!notifier.update && (isFirstRun || intervalPassed)) {
+  try {
+    const update = await notifier.fetchInfo();
+    notifier.config?.set('lastUpdateCheck', Date.now());
+    if (update && update.type !== 'latest') {
+      notifier.update = update;
+    }
+  } catch {
+    // Ignore network errors
+  }
+}
+
+// Re-cache update for next run
+if (notifier.update && notifier.update.current !== notifier.update.latest) {
+  notifier.config?.set('update', notifier.update);
+} else {
+  notifier.config?.delete('update');
+}
+
+// Show notification on exit
+process.on('exit', () => {
+  if (notifier.update && notifier.update.current !== notifier.update.latest) {
+    console.error(
+      chalk.yellow(`\n  Update available: ${notifier.update.current} → ${notifier.update.latest}`) +
+      chalk.dim(`\n  Run: npm i -g ${pkg.name}\n`)
+    );
+  }
+});
 
 // Data directory for server files
 const DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), '.shared-things-server');
@@ -187,18 +234,25 @@ program
 
     console.log(chalk.bold('\n📊 Server Status\n'));
 
+    // Version info
+    let versionLine = `  ${chalk.dim('Version:')} ${pkg.version}`;
+    if (notifier.update && notifier.update.current !== notifier.update.latest) {
+      versionLine += chalk.yellow(` → ${notifier.update.latest} available`);
+    }
+    console.log(versionLine);
+
     if (status.running) {
-      console.log(`  ${chalk.dim('Status:')} ${chalk.green('● running')}`);
-      console.log(`  ${chalk.dim('PID:')}    ${status.pid}`);
+      console.log(`  ${chalk.dim('Status:')}  ${chalk.green('● running')}`);
+      console.log(`  ${chalk.dim('PID:')}     ${status.pid}`);
     } else {
-      console.log(`  ${chalk.dim('Status:')} ${chalk.red('○ stopped')}`);
+      console.log(`  ${chalk.dim('Status:')}  ${chalk.red('○ stopped')}`);
     }
 
     // Show log file info
     if (fs.existsSync(LOG_FILE)) {
       const stats = fs.statSync(LOG_FILE);
       const sizeKB = Math.round(stats.size / 1024);
-      console.log(`  ${chalk.dim('Logs:')}   ${LOG_FILE} (${sizeKB}KB)`);
+      console.log(`  ${chalk.dim('Logs:')}    ${LOG_FILE} (${sizeKB}KB)`);
     }
 
     // Show database info
@@ -207,8 +261,8 @@ program
       const db = initDatabase();
       const users = listUsers(db);
       const todos = getAllTodos(db);
-      console.log(`  ${chalk.dim('Users:')}  ${users.length}`);
-      console.log(`  ${chalk.dim('Todos:')}  ${todos.length}`);
+      console.log(`  ${chalk.dim('Users:')}   ${users.length}`);
+      console.log(`  ${chalk.dim('Todos:')}   ${todos.length}`);
     }
 
     console.log();
