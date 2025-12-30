@@ -34,6 +34,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Build common (required for typecheck)
+        run: pnpm --filter @shared-things/common build
+
       - name: Typecheck
         run: pnpm typecheck
 
