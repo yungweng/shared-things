@@ -16,6 +16,14 @@ pnpm build
 # Development (watch mode for all packages)
 pnpm dev
 
+# Linting & formatting (Biome)
+pnpm lint              # Check for issues
+pnpm lint:fix          # Auto-fix issues
+pnpm format            # Format code
+
+# Type checking
+pnpm typecheck
+
 # Build single package
 pnpm --filter @shared-things/server build
 pnpm --filter @shared-things/daemon build
@@ -31,6 +39,10 @@ node packages/server/dist/cli.js create-user
 node packages/daemon/dist/cli.js init
 node packages/daemon/dist/cli.js sync
 ```
+
+## Code Style
+
+Biome enforces tabs for indentation and double quotes. Run `pnpm lint:fix` before committing.
 
 ## Published Packages
 
