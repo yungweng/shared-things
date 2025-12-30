@@ -2,42 +2,42 @@
  * Daemon configuration management
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import type { DaemonConfig } from '@shared-things/common';
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { DaemonConfig } from "@shared-things/common";
 
-const CONFIG_DIR = path.join(os.homedir(), '.shared-things');
-const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+const CONFIG_DIR = path.join(os.homedir(), ".shared-things");
+const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 
 export function getConfigDir(): string {
-  return CONFIG_DIR;
+	return CONFIG_DIR;
 }
 
 export function ensureConfigDir(): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
+	if (!fs.existsSync(CONFIG_DIR)) {
+		fs.mkdirSync(CONFIG_DIR, { recursive: true });
+	}
 }
 
 export function loadConfig(): DaemonConfig | null {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    return null;
-  }
+	if (!fs.existsSync(CONFIG_PATH)) {
+		return null;
+	}
 
-  try {
-    const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(content) as DaemonConfig;
-  } catch {
-    return null;
-  }
+	try {
+		const content = fs.readFileSync(CONFIG_PATH, "utf-8");
+		return JSON.parse(content) as DaemonConfig;
+	} catch {
+		return null;
+	}
 }
 
 export function saveConfig(config: DaemonConfig): void {
-  ensureConfigDir();
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+	ensureConfigDir();
+	fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 
 export function configExists(): boolean {
-  return fs.existsSync(CONFIG_PATH);
+	return fs.existsSync(CONFIG_PATH);
 }
