@@ -1,6 +1,6 @@
 {
   "name": "shared-things-daemon",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Sync Things 3 projects between multiple macOS users",
   "type": "module",
   "main": "./dist/cli.js",
