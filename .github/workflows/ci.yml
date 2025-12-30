@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   ci:
-    name: Build
+    name: Lint, Typecheck & Build
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -30,6 +30,15 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build common (required for typecheck)
+        run: pnpm --filter @shared-things/common build
+
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Build
         run: pnpm build

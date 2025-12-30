@@ -2,42 +2,42 @@
  * Things 3 integration via AppleScript and URL Scheme
  */
 
-import { execSync } from 'child_process';
+import { execSync } from "node:child_process";
 
 export interface ThingsTodo {
-  thingsId: string;
-  title: string;
-  notes: string;
-  dueDate: string | null;
-  tags: string[];
-  status: 'open' | 'completed' | 'canceled';
-  headingThingsId: string | null;
+	thingsId: string;
+	title: string;
+	notes: string;
+	dueDate: string | null;
+	tags: string[];
+	status: "open" | "completed" | "canceled";
+	headingThingsId: string | null;
 }
 
 export interface ThingsHeading {
-  thingsId: string;
-  title: string;
+	thingsId: string;
+	title: string;
 }
 
 /**
  * Execute AppleScript and return result
  */
 function runAppleScript(script: string): string {
-  try {
-    return execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, {
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-    }).trim();
-  } catch (error) {
-    throw new Error(`AppleScript failed: ${error}`);
-  }
+	try {
+		return execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, {
+			encoding: "utf-8",
+			maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+		}).trim();
+	} catch (error) {
+		throw new Error(`AppleScript failed: ${error}`);
+	}
 }
 
 /**
  * Get all todos from a Things project
  */
 export function getTodosFromProject(projectName: string): ThingsTodo[] {
-  const script = `
+	const script = `
     tell application "Things3"
       set todoList to {}
       set proj to project "${projectName}"
@@ -79,113 +79,123 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
     end tell
   `;
 
-  const result = runAppleScript(script);
-  if (!result) return [];
+	const result = runAppleScript(script);
+	if (!result) return [];
 
-  return result.split('^^^').map(line => {
-    const [thingsId, title, notes, dueDate, tags, status, headingThingsId] = line.split('|||');
-    return {
-      thingsId,
-      title: title || '',
-      notes: notes || '',
-      dueDate: dueDate || null,
-      tags: tags ? tags.split(', ').filter(Boolean) : [],
-      status: (status as 'open' | 'completed' | 'canceled') || 'open',
-      headingThingsId: headingThingsId || null,
-    };
-  });
+	return result.split("^^^").map((line) => {
+		const [thingsId, title, notes, dueDate, tags, status, headingThingsId] =
+			line.split("|||");
+		return {
+			thingsId,
+			title: title || "",
+			notes: notes || "",
+			dueDate: dueDate || null,
+			tags: tags ? tags.split(", ").filter(Boolean) : [],
+			status: (status as "open" | "completed" | "canceled") || "open",
+			headingThingsId: headingThingsId || null,
+		};
+	});
 }
 
 /**
  * Get all headings from a Things project
  */
-export function getHeadingsFromProject(projectName: string): ThingsHeading[] {
-  // Note: Things AppleScript doesn't directly expose headings
-  // We would need to use the Things database or work around this
-  // For now, return empty - headings are optional
-  return [];
+export function getHeadingsFromProject(_projectName: string): ThingsHeading[] {
+	// Note: Things AppleScript doesn't directly expose headings
+	// We would need to use the Things database or work around this
+	// For now, return empty - headings are optional
+	return [];
 }
 
 /**
  * Create a new todo in Things via URL scheme
  */
-export function createTodo(projectName: string, todo: {
-  title: string;
-  notes?: string;
-  dueDate?: string;
-  tags?: string[];
-}): void {
-  const params = new URLSearchParams();
-  params.set('title', todo.title);
-  if (todo.notes) params.set('notes', todo.notes);
-  if (todo.dueDate) params.set('when', todo.dueDate);
-  if (todo.tags?.length) params.set('tags', todo.tags.join(','));
-  params.set('list', projectName);
+export function createTodo(
+	projectName: string,
+	todo: {
+		title: string;
+		notes?: string;
+		dueDate?: string;
+		tags?: string[];
+	},
+): void {
+	const params = new URLSearchParams();
+	params.set("title", todo.title);
+	if (todo.notes) params.set("notes", todo.notes);
+	if (todo.dueDate) params.set("when", todo.dueDate);
+	if (todo.tags?.length) params.set("tags", todo.tags.join(","));
+	params.set("list", projectName);
 
-  // URLSearchParams encodes spaces as '+', but Things expects '%20'
-  const url = `things:///add?${params.toString().replace(/\+/g, '%20')}`;
-  // -g flag opens in background without stealing focus
-  execSync(`open -g "${url}"`);
+	// URLSearchParams encodes spaces as '+', but Things expects '%20'
+	const url = `things:///add?${params.toString().replace(/\+/g, "%20")}`;
+	// -g flag opens in background without stealing focus
+	execSync(`open -g "${url}"`);
 }
 
 /**
  * Update an existing todo via URL scheme
  */
-export function updateTodo(authToken: string, thingsId: string, updates: {
-  title?: string;
-  notes?: string;
-  dueDate?: string;
-  completed?: boolean;
-  canceled?: boolean;
-}): void {
-  const params = new URLSearchParams();
-  params.set('auth-token', authToken);
-  params.set('id', thingsId);
+export function updateTodo(
+	authToken: string,
+	thingsId: string,
+	updates: {
+		title?: string;
+		notes?: string;
+		dueDate?: string;
+		completed?: boolean;
+		canceled?: boolean;
+	},
+): void {
+	const params = new URLSearchParams();
+	params.set("auth-token", authToken);
+	params.set("id", thingsId);
 
-  if (updates.title !== undefined) params.set('title', updates.title);
-  if (updates.notes !== undefined) params.set('notes', updates.notes);
-  if (updates.dueDate !== undefined) params.set('when', updates.dueDate);
-  if (updates.completed !== undefined) params.set('completed', updates.completed.toString());
-  if (updates.canceled !== undefined) params.set('canceled', updates.canceled.toString());
+	if (updates.title !== undefined) params.set("title", updates.title);
+	if (updates.notes !== undefined) params.set("notes", updates.notes);
+	if (updates.dueDate !== undefined) params.set("when", updates.dueDate);
+	if (updates.completed !== undefined)
+		params.set("completed", updates.completed.toString());
+	if (updates.canceled !== undefined)
+		params.set("canceled", updates.canceled.toString());
 
-  // URLSearchParams encodes spaces as '+', but Things expects '%20'
-  const url = `things:///update?${params.toString().replace(/\+/g, '%20')}`;
-  // -g flag opens in background without stealing focus
-  execSync(`open -g "${url}"`);
+	// URLSearchParams encodes spaces as '+', but Things expects '%20'
+	const url = `things:///update?${params.toString().replace(/\+/g, "%20")}`;
+	// -g flag opens in background without stealing focus
+	execSync(`open -g "${url}"`);
 }
 
 /**
  * Get the Things URL scheme auth token (user must enable in Things settings)
  */
 export function getAuthToken(): string | null {
-  // The auth token needs to be configured by the user
-  // It's available in Things > Settings > General > Things URLs
-  // For now, we'll read it from config
-  return null;
+	// The auth token needs to be configured by the user
+	// It's available in Things > Settings > General > Things URLs
+	// For now, we'll read it from config
+	return null;
 }
 
 /**
  * Check if Things is running
  */
 export function isThingsRunning(): boolean {
-  try {
-    const result = runAppleScript(`
+	try {
+		const result = runAppleScript(`
       tell application "System Events"
         return (name of processes) contains "Things3"
       end tell
     `);
-    return result === 'true';
-  } catch {
-    return false;
-  }
+		return result === "true";
+	} catch {
+		return false;
+	}
 }
 
 /**
  * Check if a project exists in Things
  */
 export function projectExists(projectName: string): boolean {
-  try {
-    const result = runAppleScript(`
+	try {
+		const result = runAppleScript(`
       tell application "Things3"
         try
           set p to project "${projectName}"
@@ -195,17 +205,17 @@ export function projectExists(projectName: string): boolean {
         end try
       end tell
     `);
-    return result === 'true';
-  } catch {
-    return false;
-  }
+		return result === "true";
+	} catch {
+		return false;
+	}
 }
 
 /**
  * List all projects in Things
  */
 export function listProjects(): string[] {
-  const result = runAppleScript(`
+	const result = runAppleScript(`
     tell application "Things3"
       set projectNames to {}
       repeat with p in projects
@@ -216,6 +226,6 @@ export function listProjects(): string[] {
     end tell
   `);
 
-  if (!result) return [];
-  return result.split('|||').filter(Boolean);
+	if (!result) return [];
+	return result.split("|||").filter(Boolean);
 }

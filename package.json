@@ -4,10 +4,14 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
-    "lint": "pnpm -r lint",
+    "lint": "biome check packages/*/src",
+    "lint:fix": "biome check --write packages/*/src",
+    "format": "biome format --write packages/*/src",
+    "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.3.10",
     "typescript": "^5.3.0"
   },
   "packageManager": "pnpm@9.0.0",
