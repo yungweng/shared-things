@@ -10,7 +10,7 @@
  * - Works on any platform (Linux, macOS)
  */
 
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,7 +18,6 @@ import * as path from "node:path";
 const DATA_DIR =
 	process.env.DATA_DIR || path.join(os.homedir(), ".shared-things-server");
 const PID_FILE = path.join(DATA_DIR, "server.pid");
-const LOG_FILE = path.join(DATA_DIR, "server.log");
 
 function isServerRunning() {
 	if (!fs.existsSync(PID_FILE)) {
@@ -69,46 +68,25 @@ function stopServer(pid) {
 }
 
 function startServer() {
-	// Find the CLI script - after npm install, it should be in node_modules/.bin or global
-	let cliPath;
+	// Verify the command exists
 	try {
-		cliPath = execSync("which shared-things-server", {
-			encoding: "utf-8",
-		}).trim();
+		execSync("which shared-things-server", { stdio: "pipe" });
 	} catch {
-		// Fallback: look relative to this script
-		cliPath = path.resolve(
-			new URL(".", import.meta.url).pathname,
-			"..",
-			"dist",
-			"cli.js",
-		);
-	}
-
-	if (!fs.existsSync(cliPath)) {
+		// Command not in PATH, can't start
 		return false;
 	}
 
-	// Ensure data directory exists
-	if (!fs.existsSync(DATA_DIR)) {
-		fs.mkdirSync(DATA_DIR, { recursive: true });
+	// Use the CLI's built-in detach mode (-d flag)
+	// This properly handles daemonization and PID file management
+	try {
+		execSync("shared-things-server start -d", {
+			stdio: "pipe",
+			timeout: 10000,
+		});
+		return true;
+	} catch {
+		return false;
 	}
-
-	// Open log file
-	const logFd = fs.openSync(LOG_FILE, "a");
-
-	const child = spawn(process.execPath, [cliPath, "start"], {
-		detached: true,
-		stdio: ["ignore", logFd, logFd],
-		env: { ...process.env, SHARED_THINGS_DETACHED: "1" },
-	});
-
-	// Write PID file
-	fs.writeFileSync(PID_FILE, String(child.pid));
-	child.unref();
-	fs.closeSync(logFd);
-
-	return true;
 }
 
 function main() {
