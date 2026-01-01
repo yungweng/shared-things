@@ -6,7 +6,12 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["packages/*/src/**", "!!**/dist", "!!**/node_modules"]
+		"includes": [
+			"packages/*/src/**",
+			"packages/*/scripts/**",
+			"!!**/dist",
+			"!!**/node_modules"
+		]
 	},
 	"formatter": {
 		"enabled": true,

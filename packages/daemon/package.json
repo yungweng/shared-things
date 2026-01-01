@@ -9,13 +9,15 @@
   },
   "files": [
     "dist",
+    "scripts",
     "README.md"
   ],
   "scripts": {
     "build": "tsup",
     "dev": "tsx watch src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "postinstall": "node scripts/postinstall.js || true"
   },
   "keywords": [
     "things",
