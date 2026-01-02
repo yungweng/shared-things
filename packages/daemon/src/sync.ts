@@ -9,6 +9,7 @@ import type { PushResponse, Todo } from "@shared-things/common";
 import { ApiClient } from "./api.js";
 import { ensureConfigDir, getConfigDir, loadConfig } from "./config.js";
 import {
+	logDebug,
 	logError,
 	logMapping,
 	logSync,
@@ -35,6 +36,7 @@ interface LocalTodoState {
 	dueDate: string | null;
 	tags: string[];
 	status: "open" | "completed" | "canceled";
+	position: number;
 	editedAt: string;
 }
 
@@ -139,7 +141,19 @@ function loadLocalState(): LocalState {
 				dueDate: todo.dueDate ?? null,
 				tags: Array.isArray(todo.tags) ? todo.tags : [],
 				status: (todo.status as LocalTodoState["status"]) || "open",
+				position:
+					typeof todo.position === "number" && Number.isFinite(todo.position)
+						? todo.position
+						: 0,
 				editedAt: lastSyncedAt,
+			};
+		} else if (
+			typeof todo.position !== "number" ||
+			!Number.isFinite(todo.position)
+		) {
+			todos[thingsId] = {
+				...todo,
+				position: 0,
 			};
 		}
 	}
@@ -247,6 +261,9 @@ export async function runSync(): Promise<{
 		releaseLock();
 		throw error;
 	}
+	logDebug(
+		`Loaded state: todos=${Object.keys(localState.todos).length}, mappings=${Object.keys(localState.serverIdToThingsId).length}, dirtyUpserted=${localState.dirty.upserted.length}, dirtyDeleted=${Object.keys(localState.dirty.deleted).length}`,
+	);
 
 	const api = new ApiClient(config.serverUrl, config.apiKey);
 	const isFirstSync =
@@ -260,6 +277,10 @@ export async function runSync(): Promise<{
 	try {
 		// 1. Read current Things state
 		const currentTodos = getTodosFromProject(config.projectName);
+		logDebug(`Read Things: todos=${currentTodos.length}`);
+		const positionMap = new Map(
+			currentTodos.map((todo, idx) => [todo.thingsId, idx]),
+		);
 		const currentTodosMap = new Map(currentTodos.map((t) => [t.thingsId, t]));
 
 		// 2. Detect local changes
@@ -268,6 +289,7 @@ export async function runSync(): Promise<{
 
 		for (const [thingsId, todo] of currentTodosMap) {
 			const prev = localState.todos[thingsId];
+			const position = positionMap.get(thingsId) ?? 0;
 			if (!prev) {
 				localState.todos[thingsId] = {
 					thingsId,
@@ -276,13 +298,14 @@ export async function runSync(): Promise<{
 					dueDate: todo.dueDate,
 					tags: todo.tags,
 					status: todo.status,
+					position,
 					editedAt: now,
 				};
 				dirtyUpserted.add(thingsId);
 				continue;
 			}
 
-			if (hasChanged(prev, todo)) {
+			if (hasChanged(prev, todo, position)) {
 				localState.todos[thingsId] = {
 					...prev,
 					title: todo.title,
@@ -290,6 +313,7 @@ export async function runSync(): Promise<{
 					dueDate: todo.dueDate,
 					tags: todo.tags,
 					status: todo.status,
+					position,
 					editedAt: now,
 				};
 				dirtyUpserted.add(thingsId);
@@ -312,10 +336,24 @@ export async function runSync(): Promise<{
 		localState.dirty.upserted = localState.dirty.upserted.filter((id) =>
 			currentTodosMap.has(id),
 		);
+		logDebug(
+			`Local changes: upserted=${localState.dirty.upserted.length}, deleted=${Object.keys(localState.dirty.deleted).length}`,
+		);
 
 		// 3. Build push payload
-		const pushUpserts = buildUpserts(currentTodos, currentTodosMap, localState);
+		const pushUpserts = buildUpserts(currentTodosMap, localState);
 		const pushDeletes = buildDeletes(currentTodosMap, localState);
+		logDebug(
+			`Push payload: upserted=${pushUpserts.length}, deleted=${pushDeletes.length}`,
+		);
+		if (pushUpserts.length > 0 || pushDeletes.length > 0) {
+			logDebug(
+				`Push payload body: ${JSON.stringify({
+					todos: { upserted: pushUpserts, deleted: pushDeletes },
+					lastSyncedAt: localState.lastSyncedAt,
+				})}`,
+			);
+		}
 
 		// 4. Push to server
 		if (pushUpserts.length > 0 || pushDeletes.length > 0) {
@@ -331,6 +369,9 @@ export async function runSync(): Promise<{
 			processPushMappings(localState, pushResponse);
 
 			const conflictEntries = conflictsFromPush(pushResponse);
+			logDebug(
+				`Push response: conflicts=${conflictEntries.length}, mappings=${pushResponse.mappings?.length ?? 0}`,
+			);
 			conflictCount += conflictEntries.length;
 			appendConflicts(conflictEntries);
 
@@ -339,6 +380,9 @@ export async function runSync(): Promise<{
 
 		// 5. Pull from server
 		const delta = await getServerDelta(api, localState, currentTodos);
+		logDebug(
+			`Delta response: upserted=${delta.todos.upserted.length}, deleted=${delta.todos.deleted.length}, syncedAt=${delta.syncedAt}`,
+		);
 		const remoteResult = await applyRemoteChanges(
 			config.thingsAuthToken,
 			config.projectName,
@@ -369,25 +413,26 @@ export async function runSync(): Promise<{
 	return { pushed, pulled, isFirstSync, conflicts: conflictCount };
 }
 
-function hasChanged(prev: LocalTodoState, curr: ThingsTodo): boolean {
+function hasChanged(
+	prev: LocalTodoState,
+	curr: ThingsTodo,
+	position: number,
+): boolean {
 	return (
 		prev.title !== curr.title ||
 		prev.notes !== curr.notes ||
 		prev.dueDate !== curr.dueDate ||
 		prev.status !== curr.status ||
+		prev.position !== position ||
 		JSON.stringify(prev.tags) !== JSON.stringify(curr.tags)
 	);
 }
 
 function buildUpserts(
-	currentTodos: ThingsTodo[],
 	currentTodosMap: Map<string, ThingsTodo>,
 	state: LocalState,
 ) {
 	const thingsIdToServerId = invertMapping(state.serverIdToThingsId);
-	const positionMap = new Map(
-		currentTodos.map((todo, idx) => [todo.thingsId, idx]),
-	);
 
 	const upserts: Array<{
 		serverId?: string;
@@ -414,7 +459,7 @@ function buildUpserts(
 			dueDate: stored.dueDate,
 			tags: stored.tags,
 			status: stored.status,
-			position: positionMap.get(thingsId) ?? 0,
+			position: stored.position,
 			editedAt: stored.editedAt,
 		});
 	}
@@ -542,6 +587,7 @@ async function applyRemoteChanges(
 					dueDate: remoteTodo.dueDate,
 					tags: remoteTodo.tags,
 					status: remoteTodo.status,
+					position: remoteTodo.position,
 					editedAt: remoteTodo.editedAt,
 				};
 				currentTodosMap.set(newTodo.thingsId, newTodo);
@@ -583,6 +629,7 @@ async function applyRemoteChanges(
 				dueDate: remoteTodo.dueDate,
 				tags: remoteTodo.tags,
 				status: remoteTodo.status,
+				position: remoteTodo.position,
 				editedAt: remoteTodo.editedAt,
 			};
 			applied += 1;
@@ -592,7 +639,12 @@ async function applyRemoteChanges(
 	for (const deletion of deleted) {
 		const localThingsId = state.serverIdToThingsId[deletion.serverId];
 		if (!localThingsId) continue;
+		const existsInThings = currentTodosMap.has(localThingsId);
 		const localStateTodo = state.todos[localThingsId];
+		if (!existsInThings && !localStateTodo) {
+			delete state.serverIdToThingsId[deletion.serverId];
+			continue;
+		}
 		if (!localStateTodo) continue;
 
 		if (compareIso(deletion.deletedAt, localStateTodo.editedAt) <= 0) {

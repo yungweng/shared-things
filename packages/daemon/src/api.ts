@@ -10,6 +10,8 @@ import type {
 } from "@shared-things/common";
 
 export class ApiClient {
+	private static readonly TIMEOUT_MS = 30_000;
+
 	constructor(
 		private serverUrl: string,
 		private apiKey: string,
@@ -26,7 +28,24 @@ export class ApiClient {
 			...options.headers,
 		};
 
-		const response = await fetch(url, { ...options, headers });
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), ApiClient.TIMEOUT_MS);
+
+		let response: Response;
+		try {
+			response = await fetch(url, {
+				...options,
+				headers,
+				signal: controller.signal,
+			});
+		} catch (error) {
+			if ((error as { name?: string }).name === "AbortError") {
+				throw new Error(`API timeout after ${ApiClient.TIMEOUT_MS}ms`);
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeout);
+		}
 
 		if (!response.ok) {
 			const error = await response
