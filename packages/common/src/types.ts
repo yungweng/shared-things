@@ -9,8 +9,6 @@
 export interface Todo {
 	/** Server-assigned unique ID */
 	id: string;
-	/** Things-assigned ID (from AppleScript) */
-	thingsId: string;
 	/** Todo title */
 	title: string;
 	/** Notes/description */
@@ -21,33 +19,12 @@ export interface Todo {
 	tags: string[];
 	/** Status */
 	status: "open" | "completed" | "canceled";
-	/** Parent heading ID (null if directly under project) */
-	headingId: string | null;
-	/** Position within heading/project for ordering */
+	/** Position within project for ordering */
 	position: number;
-	/** Last modified timestamp (ISO 8601) */
+	/** Client edit timestamp (ISO 8601) */
+	editedAt: string;
+	/** Server update timestamp (ISO 8601) */
 	updatedAt: string;
-	/** User who last modified */
-	updatedBy: string;
-	/** Creation timestamp (ISO 8601) */
-	createdAt: string;
-}
-
-export interface Heading {
-	/** Server-assigned unique ID */
-	id: string;
-	/** Things-assigned ID (from AppleScript) */
-	thingsId: string;
-	/** Heading title */
-	title: string;
-	/** Position for ordering */
-	position: number;
-	/** Last modified timestamp (ISO 8601) */
-	updatedAt: string;
-	/** User who last modified */
-	updatedBy: string;
-	/** Creation timestamp (ISO 8601) */
-	createdAt: string;
 }
 
 export interface User {
@@ -67,7 +44,6 @@ export interface User {
 
 /** Full project state for initial sync */
 export interface ProjectState {
-	headings: Heading[];
 	todos: Todo[];
 	/** Server timestamp for this state */
 	syncedAt: string;
@@ -75,15 +51,10 @@ export interface ProjectState {
 
 /** Changes since last sync */
 export interface SyncDelta {
-	/** Headings that were added or modified */
-	headings: {
-		upserted: Heading[];
-		deleted: string[]; // IDs
-	};
 	/** Todos that were added or modified */
 	todos: {
 		upserted: Todo[];
-		deleted: string[]; // IDs
+		deleted: { serverId: string; deletedAt: string }[];
 	};
 	/** Server timestamp for this delta */
 	syncedAt: string;
@@ -93,26 +64,23 @@ export interface SyncDelta {
 export interface PushTodo {
 	/** Server ID (include for updates, omit for new items) */
 	serverId?: string;
-	/** Local Things ID */
-	thingsId: string;
+	/** Client-local ID for mapping (not stored on server) */
+	clientId?: string;
 	title: string;
 	notes: string;
 	dueDate: string | null;
 	tags: string[];
 	status: "open" | "completed" | "canceled";
-	headingId: string | null;
 	position: number;
+	/** Client edit timestamp */
+	editedAt: string;
 }
 
 /** Request to push local changes */
 export interface PushRequest {
-	headings: {
-		upserted: Omit<Heading, "id" | "updatedAt" | "updatedBy" | "createdAt">[];
-		deleted: string[]; // server IDs
-	};
 	todos: {
 		upserted: PushTodo[];
-		deleted: string[]; // server IDs
+		deleted: { serverId: string; deletedAt: string }[];
 	};
 	/** Client's last known sync timestamp */
 	lastSyncedAt: string;
@@ -124,17 +92,16 @@ export interface PushResponse {
 	state: ProjectState;
 	/** Conflicts that occurred (for logging/debugging) */
 	conflicts: Conflict[];
+	/** Server ID mappings for newly created todos */
+	mappings?: { serverId: string; clientId: string }[];
 }
 
 export interface Conflict {
-	type: "todo" | "heading";
-	thingsId: string;
-	/** What the client tried to set */
-	clientValue: string;
-	/** What the server had (which won) */
-	serverValue: string;
-	/** Who made the conflicting change */
-	conflictingUser: string;
+	serverId: string;
+	reason: string;
+	serverTodo: Todo | null;
+	clientTodo?: PushTodo;
+	clientDeletedAt?: string;
 }
 
 // =============================================================================

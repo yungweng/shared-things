@@ -54,12 +54,14 @@ shared-things init
 ? Things auth token: ****
 ```
 
+> **Note:** The Things project must be empty when you run `init`.
+
 > **Things auth token:** Required for syncing updates to existing todos. Find it in Things → Settings → General → Things URLs → Enable Things URLs.
 
 ### After Setup
 
 ```bash
-shared-things install   # Start daemon (auto-runs on login)
+shared-things start     # Start daemon (auto-runs on login)
 shared-things status    # Check sync status
 shared-things logs -f   # Follow sync logs
 ```
@@ -69,13 +71,16 @@ shared-things logs -f   # Follow sync logs
 | Command | Description |
 |---------|-------------|
 | `init` | Setup wizard |
-| `install` | Install launchd daemon (auto-starts on login) |
-| `uninstall` | Remove launchd daemon |
+| `start` | Start launchd daemon (auto-starts on login) |
+| `stop` | Stop launchd daemon |
 | `status` | Show sync status & last sync time |
 | `sync` | Force immediate sync |
 | `logs [-f]` | Show logs (`-f` to follow) |
-| `reset [--server]` | Reset local state (`--server` clears server too) |
-| `purge` | Remove all local config |
+| `conflicts [--all]` | Show conflict history |
+| `repair` | Diagnose state issues (no auto-fix) |
+| `reset --local` | Clear local state |
+| `reset --server` | Clear server data for this user |
+| `doctor` | Comprehensive health check |
 
 ## Server Setup
 
@@ -143,9 +148,8 @@ things.yourdomain.com {
 
 | Synced | Not Synced |
 |--------|------------|
-| Todo title, notes, due date, tags | Completed todos |
-| Headings | Checklist items |
-| | Areas |
+| Todo title, notes, due date, tags, status | Checklist items |
+|  | Headings, Areas |
 
 > **Note:** The project must exist in each user's Things app. Only items within that project sync.
 

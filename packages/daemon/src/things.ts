@@ -3,6 +3,7 @@
  */
 
 import { execSync } from "node:child_process";
+import { logWarn } from "./logger.js";
 
 export interface ThingsTodo {
 	thingsId: string;
@@ -11,13 +12,11 @@ export interface ThingsTodo {
 	dueDate: string | null;
 	tags: string[];
 	status: "open" | "completed" | "canceled";
-	headingThingsId: string | null;
 }
 
-export interface ThingsHeading {
-	thingsId: string;
-	title: string;
-}
+const PIPE_TOKEN = "{{PIPE}}";
+const CARET_TOKEN = "{{CARET}}";
+const MAX_URL_LENGTH = 2000;
 
 /**
  * Execute AppleScript and return result
@@ -38,22 +37,34 @@ function runAppleScript(script: string): string {
  */
 export function getTodosFromProject(projectName: string): ThingsTodo[] {
 	const script = `
+    on replaceText(findText, replaceText, theText)
+      set AppleScript's text item delimiters to findText
+      set theItems to every text item of theText
+      set AppleScript's text item delimiters to replaceText
+      set theText to theItems as string
+      set AppleScript's text item delimiters to ""
+      return theText
+    end replaceText
+
+    on escapeText(t)
+      if t is missing value then return ""
+      set t to my replaceText("|||", "${PIPE_TOKEN}", t as string)
+      set t to my replaceText("^^^", "${CARET_TOKEN}", t as string)
+      return t
+    end escapeText
+
     tell application "Things3"
       set todoList to {}
       set proj to project "${projectName}"
       repeat with t in to dos of proj
         set todoId to id of t
-        set todoTitle to name of t
-        set todoNotes to notes of t
+        set todoTitle to my escapeText(name of t)
+        set todoNotes to my escapeText(notes of t)
         set todoStatus to status of t
         set todoDue to due date of t
-        set todoTags to tag names of t
-
-        -- Get heading if any
-        set todoHeading to ""
-        try
-          set todoHeading to id of (get area of t)
-        end try
+        set AppleScript's text item delimiters to ", "
+        set todoTags to my escapeText((tag names of t) as string)
+        set AppleScript's text item delimiters to ""
 
         -- Format due date
         set dueDateStr to ""
@@ -71,7 +82,7 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
           set statusStr to "canceled"
         end if
 
-        set end of todoList to todoId & "|||" & todoTitle & "|||" & todoNotes & "|||" & dueDateStr & "|||" & todoTags & "|||" & statusStr & "|||" & todoHeading
+        set end of todoList to todoId & "|||" & todoTitle & "|||" & todoNotes & "|||" & dueDateStr & "|||" & todoTags & "|||" & statusStr
       end repeat
 
       set AppleScript's text item delimiters to "^^^"
@@ -83,28 +94,24 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
 	if (!result) return [];
 
 	return result.split("^^^").map((line) => {
-		const [thingsId, title, notes, dueDate, tags, status, headingThingsId] =
-			line.split("|||");
+		const [thingsId, title, notes, dueDate, tags, status] = line.split("|||");
+		const decodedTitle = unescapeField(title);
+		const decodedNotes = unescapeField(notes);
+		const decodedTags = unescapeField(tags);
 		return {
 			thingsId,
-			title: title || "",
-			notes: notes || "",
+			title: decodedTitle || "",
+			notes: decodedNotes || "",
 			dueDate: dueDate || null,
-			tags: tags ? tags.split(", ").filter(Boolean) : [],
+			tags: decodedTags ? decodedTags.split(", ").filter(Boolean) : [],
 			status: (status as "open" | "completed" | "canceled") || "open",
-			headingThingsId: headingThingsId || null,
 		};
 	});
 }
 
-/**
- * Get all headings from a Things project
- */
-export function getHeadingsFromProject(_projectName: string): ThingsHeading[] {
-	// Note: Things AppleScript doesn't directly expose headings
-	// We would need to use the Things database or work around this
-	// For now, return empty - headings are optional
-	return [];
+function unescapeField(value: string): string {
+	if (!value) return "";
+	return value.replaceAll(PIPE_TOKEN, "|||").replaceAll(CARET_TOKEN, "^^^");
 }
 
 /**
@@ -127,7 +134,19 @@ export function createTodo(
 	params.set("list", projectName);
 
 	// URLSearchParams encodes spaces as '+', but Things expects '%20'
-	const url = `things:///add?${params.toString().replace(/\+/g, "%20")}`;
+	let url = `things:///add?${params.toString().replace(/\+/g, "%20")}`;
+	if (url.length > MAX_URL_LENGTH && todo.notes) {
+		const originalNotes = todo.notes;
+		let truncated = originalNotes;
+		while (truncated.length > 0 && url.length > MAX_URL_LENGTH) {
+			truncated = truncated.slice(0, Math.max(0, truncated.length - 200));
+			params.set("notes", truncated);
+			url = `things:///add?${params.toString().replace(/\+/g, "%20")}`;
+		}
+		logWarn(
+			`Create URL exceeded ${MAX_URL_LENGTH} chars; notes truncated from ${originalNotes.length} to ${truncated.length}`,
+		);
+	}
 	// -g flag opens in background without stealing focus
 	execSync(`open -g "${url}"`);
 }

@@ -74,11 +74,11 @@ export class ApiClient {
 	 */
 	async reset(): Promise<{
 		success: boolean;
-		deleted: { todos: number; headings: number };
+		deleted: { todos: number };
 	}> {
 		return this.request<{
 			success: boolean;
-			deleted: { todos: number; headings: number };
+			deleted: { todos: number };
 		}>("/reset", {
 			method: "DELETE",
 		});
