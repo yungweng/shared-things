@@ -147,6 +147,9 @@ Only ONE sync runs at a time. Lock file with PID check prevents concurrent syncs
 
 **Last-EDIT-wins** based on client timestamps (not last-sync-wins).
 
+> **Clarification:** Client timestamps are set when the daemon detects a change in Things
+> (poll time), not when the user performed the edit.
+
 ### Edit-Edit Conflict
 
 **Scenario:**
@@ -229,7 +232,7 @@ shared-things init
 
 ### Guarantee
 
-Local edits are NEVER lost due to being offline. Timestamps preserve the true edit time.
+Local edits are NEVER lost due to being offline. Timestamps preserve the edit time **as detected by the daemon**.
 
 ---
 

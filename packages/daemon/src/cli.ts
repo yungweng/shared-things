@@ -477,8 +477,24 @@ program
 			return;
 		}
 
+		const config = loadConfig()!;
 		const statePath = path.join(getConfigDir(), "state.json");
 		const hasLocalState = fs.existsSync(statePath);
+
+		if (options.local) {
+			try {
+				const todos = getTodosFromProject(config.projectName);
+				if (todos.length > 0) {
+					console.error(
+						`❌ Project "${config.projectName}" must be empty to reset local state.`,
+					);
+					return;
+				}
+			} catch (error) {
+				console.error(`❌ Failed to read Things project: ${error}`);
+				return;
+			}
+		}
 
 		const confirmed = await confirm({
 			message: "This action cannot be undone. Continue?",
@@ -492,7 +508,6 @@ program
 
 		// Reset server data if requested
 		if (options.server) {
-			const config = loadConfig()!;
 			const api = new ApiClient(config.serverUrl, config.apiKey);
 
 			try {

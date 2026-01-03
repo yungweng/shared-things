@@ -11,6 +11,7 @@ import { ensureConfigDir, getConfigDir, loadConfig } from "./config.js";
 import {
 	logDebug,
 	logError,
+	logInfo,
 	logMapping,
 	logSync,
 	logTodoCreated,
@@ -264,6 +265,7 @@ export async function runSync(): Promise<{
 	logDebug(
 		`Loaded state: todos=${Object.keys(localState.todos).length}, mappings=${Object.keys(localState.serverIdToThingsId).length}, dirtyUpserted=${localState.dirty.upserted.length}, dirtyDeleted=${Object.keys(localState.dirty.deleted).length}`,
 	);
+	logInfo("Sync started");
 
 	const api = new ApiClient(config.serverUrl, config.apiKey);
 	const isFirstSync =
