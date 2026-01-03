@@ -1,7 +1,8 @@
 /**
  * Test setup utilities
  *
- * Provides helpers to spin up an isolated test server with in-memory SQLite
+ * Provides helpers to spin up an isolated test server with file-backed SQLite
+ * in a temp directory. Each test file gets its own isolated database.
  */
 
 import * as crypto from "node:crypto";

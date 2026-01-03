@@ -48,7 +48,7 @@ describe("DELETE /reset", () => {
 		expect(status).toBe(200);
 		const response = data as { success: boolean; deleted: { todos: number } };
 		expect(response.success).toBe(true);
-		expect(response.deleted.todos).toBeGreaterThanOrEqual(2);
+		expect(response.deleted.todos).toBe(2);
 
 		// Verify todos are gone
 		const afterReset = await apiRequest(ctx, "GET", "/state", {
