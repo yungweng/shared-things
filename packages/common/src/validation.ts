@@ -2,7 +2,7 @@
  * Validation utilities
  */
 
-import type { Heading, PushRequest, Todo } from "./types.js";
+import type { PushRequest, Todo } from "./types.js";
 
 export function isValidTodo(obj: unknown): obj is Partial<Todo> {
 	if (typeof obj !== "object" || obj === null) return false;
@@ -20,24 +20,11 @@ export function isValidTodo(obj: unknown): obj is Partial<Todo> {
 	return true;
 }
 
-export function isValidHeading(obj: unknown): obj is Partial<Heading> {
-	if (typeof obj !== "object" || obj === null) return false;
-	const heading = obj as Record<string, unknown>;
-
-	if (heading.title !== undefined && typeof heading.title !== "string")
-		return false;
-	if (heading.position !== undefined && typeof heading.position !== "number")
-		return false;
-
-	return true;
-}
-
 export function isValidPushRequest(obj: unknown): obj is PushRequest {
 	if (typeof obj !== "object" || obj === null) return false;
 	const req = obj as Record<string, unknown>;
 
 	if (typeof req.lastSyncedAt !== "string") return false;
-	if (typeof req.headings !== "object" || req.headings === null) return false;
 	if (typeof req.todos !== "object" || req.todos === null) return false;
 
 	return true;

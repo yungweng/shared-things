@@ -27,7 +27,7 @@ export function installLaunchAgent(): void {
 		binPath = path.join(npmPrefix, "bin", "shared-things");
 	}
 
-	const logPath = path.join(os.homedir(), ".shared-things", "daemon.log");
+	const logPath = path.join(os.homedir(), ".shared-things", "sync.log");
 
 	// Get the directory containing the current node binary (supports nvm, fnm, etc.)
 	let nodeBinDir: string;
@@ -97,6 +97,32 @@ export function installLaunchAgent(): void {
 	} catch (error) {
 		console.warn(`Warning: Could not load LaunchAgent: ${error}`);
 		console.warn("You may need to manually load it or restart your Mac.");
+	}
+}
+
+export function startLaunchAgent(): void {
+	if (!fs.existsSync(PLIST_PATH)) {
+		installLaunchAgent();
+		return;
+	}
+	try {
+		execSync(`launchctl load "${PLIST_PATH}"`);
+		console.log("LaunchAgent started.");
+	} catch (error) {
+		console.warn(`Warning: Could not start LaunchAgent: ${error}`);
+	}
+}
+
+export function stopLaunchAgent(): void {
+	if (!fs.existsSync(PLIST_PATH)) {
+		console.log("LaunchAgent not installed.");
+		return;
+	}
+	try {
+		execSync(`launchctl unload "${PLIST_PATH}"`);
+		console.log("LaunchAgent stopped.");
+	} catch (error) {
+		console.warn(`Warning: Could not stop LaunchAgent: ${error}`);
 	}
 }
 

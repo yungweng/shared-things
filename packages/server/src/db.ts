@@ -1,5 +1,5 @@
 /**
- * SQLite database setup and queries
+ * SQLite database setup and queries (v2)
  */
 
 import * as crypto from "node:crypto";
@@ -14,20 +14,31 @@ const DB_PATH = path.join(DATA_DIR, "data.db");
 
 export type DB = Database.Database;
 
+type DbTodoRow = {
+	id: string;
+	title: string;
+	notes: string;
+	due_date: string | null;
+	tags: string;
+	status: "open" | "completed" | "canceled";
+	position: number;
+	edited_at: string;
+	updated_at: string;
+	updated_by: string;
+};
+
 export function initDatabase(): DB {
-	// Ensure data directory exists
 	if (!fs.existsSync(DATA_DIR)) {
 		fs.mkdirSync(DATA_DIR, { recursive: true });
 	}
 
 	const db = new Database(DB_PATH);
-
-	// Enable WAL mode for better concurrency
 	db.pragma("journal_mode = WAL");
+	db.pragma("foreign_keys = ON");
 
-	// Create tables
+	migrateDatabase(db);
+
 	db.exec(`
-    -- Users table
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -35,49 +46,135 @@ export function initDatabase(): DB {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- Headings table
-    CREATE TABLE IF NOT EXISTS headings (
-      id TEXT PRIMARY KEY,
-      things_id TEXT NOT NULL UNIQUE,
-      title TEXT NOT NULL,
-      position INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_by TEXT NOT NULL REFERENCES users(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    -- Todos table
     CREATE TABLE IF NOT EXISTS todos (
       id TEXT PRIMARY KEY,
-      things_id TEXT NOT NULL UNIQUE,
       title TEXT NOT NULL,
       notes TEXT NOT NULL DEFAULT '',
       due_date TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed', 'canceled')),
-      heading_id TEXT REFERENCES headings(id) ON DELETE SET NULL,
       position INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_by TEXT NOT NULL REFERENCES users(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      edited_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      updated_by TEXT NOT NULL REFERENCES users(id)
     );
 
-    -- Deleted items tracking (for sync)
     CREATE TABLE IF NOT EXISTS deleted_items (
       id TEXT PRIMARY KEY,
-      things_id TEXT NOT NULL,
-      item_type TEXT NOT NULL CHECK (item_type IN ('todo', 'heading')),
-      deleted_at TEXT NOT NULL DEFAULT (datetime('now')),
+      server_id TEXT NOT NULL,
+      deleted_at TEXT NOT NULL,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_by TEXT NOT NULL REFERENCES users(id)
     );
 
-    -- Indexes
     CREATE INDEX IF NOT EXISTS idx_todos_updated ON todos(updated_at);
-    CREATE INDEX IF NOT EXISTS idx_headings_updated ON headings(updated_at);
-    CREATE INDEX IF NOT EXISTS idx_deleted_at ON deleted_items(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_deleted_recorded ON deleted_items(recorded_at);
   `);
 
 	return db;
+}
+
+function migrateDatabase(db: DB): void {
+	db.pragma("foreign_keys = OFF");
+	const hasTodos = db
+		.prepare(
+			`SELECT name FROM sqlite_master WHERE type='table' AND name='todos'`,
+		)
+		.get();
+
+	if (hasTodos) {
+		const columns = db.prepare(`PRAGMA table_info(todos)`).all() as Array<{
+			name: string;
+		}>;
+		const hasThingsId = columns.some((col) => col.name === "things_id");
+		const hasEditedAt = columns.some((col) => col.name === "edited_at");
+
+		if (hasThingsId || !hasEditedAt) {
+			db.exec(`
+        CREATE TABLE IF NOT EXISTS todos_new (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          notes TEXT NOT NULL DEFAULT '',
+          due_date TEXT,
+          tags TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed', 'canceled')),
+          position INTEGER NOT NULL DEFAULT 0,
+          edited_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          updated_by TEXT NOT NULL
+        );
+      `);
+
+			// Best-effort migration: use updated_at as edited_at and updated_by as created_by.
+			db.exec(`
+        INSERT INTO todos_new (id, title, notes, due_date, tags, status, position, edited_at, updated_at, created_by, updated_by)
+        SELECT id, title, notes, due_date, tags, status, position, updated_at, updated_at, updated_by, updated_by
+        FROM todos;
+      `);
+
+			db.exec(`
+        DROP TABLE todos;
+        ALTER TABLE todos_new RENAME TO todos;
+      `);
+		}
+	}
+
+	const hasDeleted = db
+		.prepare(
+			`SELECT name FROM sqlite_master WHERE type='table' AND name='deleted_items'`,
+		)
+		.get();
+	if (hasDeleted) {
+		const columns = db
+			.prepare(`PRAGMA table_info(deleted_items)`)
+			.all() as Array<{ name: string }>;
+		const hasServerId = columns.some((col) => col.name === "server_id");
+		const hasRecordedAt = columns.some((col) => col.name === "recorded_at");
+
+		if (!hasServerId) {
+			// v1 -> v2 migration: rename things_id to server_id, add recorded_at
+			db.exec(`
+        CREATE TABLE IF NOT EXISTS deleted_items_new (
+          id TEXT PRIMARY KEY,
+          server_id TEXT NOT NULL,
+          deleted_at TEXT NOT NULL,
+          recorded_at TEXT NOT NULL,
+          deleted_by TEXT NOT NULL
+        );
+      `);
+
+			// Use deleted_at as recorded_at for historical records
+			db.exec(`
+        INSERT INTO deleted_items_new (id, server_id, deleted_at, recorded_at, deleted_by)
+        SELECT id, things_id, deleted_at, deleted_at, deleted_by
+        FROM deleted_items
+        WHERE item_type = 'todo';
+      `);
+
+			db.exec(`
+        DROP TABLE deleted_items;
+        ALTER TABLE deleted_items_new RENAME TO deleted_items;
+      `);
+		} else if (!hasRecordedAt) {
+			// v2 -> v2.1 migration: add recorded_at column
+			db.exec(`
+        ALTER TABLE deleted_items ADD COLUMN recorded_at TEXT;
+        UPDATE deleted_items SET recorded_at = deleted_at WHERE recorded_at IS NULL;
+      `);
+		}
+	}
+
+	const hasHeadings = db
+		.prepare(
+			`SELECT name FROM sqlite_master WHERE type='table' AND name='headings'`,
+		)
+		.get();
+	if (hasHeadings) {
+		db.exec(`DROP TABLE headings;`);
+	}
+	db.pragma("foreign_keys = ON");
 }
 
 // =============================================================================
@@ -93,7 +190,6 @@ export function createUser(
 	db: DB,
 	name: string,
 ): { id: string; apiKey: string } {
-	// Check for duplicate username
 	if (userExists(db, name)) {
 		throw new Error(`User "${name}" already exists`);
 	}
@@ -117,9 +213,7 @@ export function getUserByApiKey(
 	const apiKeyHash = crypto.createHash("sha256").update(apiKey).digest("hex");
 
 	const row = db
-		.prepare(`
-    SELECT id, name FROM users WHERE api_key_hash = ?
-  `)
+		.prepare(`SELECT id, name FROM users WHERE api_key_hash = ?`)
 		.get(apiKeyHash) as { id: string; name: string } | undefined;
 
 	return row || null;
@@ -129,90 +223,8 @@ export function listUsers(
 	db: DB,
 ): { id: string; name: string; createdAt: string }[] {
 	return db
-		.prepare(`
-    SELECT id, name, created_at as createdAt FROM users
-  `)
+		.prepare(`SELECT id, name, created_at as createdAt FROM users`)
 		.all() as { id: string; name: string; createdAt: string }[];
-}
-
-// =============================================================================
-// Heading queries
-// =============================================================================
-
-export function getAllHeadings(db: DB) {
-	return db
-		.prepare(`
-    SELECT
-      id, things_id as thingsId, title, position,
-      updated_at as updatedAt, updated_by as updatedBy, created_at as createdAt
-    FROM headings
-    ORDER BY position
-  `)
-		.all();
-}
-
-export function getHeadingsSince(db: DB, since: string) {
-	return db
-		.prepare(`
-    SELECT
-      id, things_id as thingsId, title, position,
-      updated_at as updatedAt, updated_by as updatedBy, created_at as createdAt
-    FROM headings
-    WHERE updated_at > ?
-    ORDER BY position
-  `)
-		.all(since);
-}
-
-export function upsertHeading(
-	db: DB,
-	thingsId: string,
-	title: string,
-	position: number,
-	userId: string,
-): string {
-	const now = new Date().toISOString();
-	const existing = db
-		.prepare(`SELECT id FROM headings WHERE things_id = ?`)
-		.get(thingsId) as { id: string } | undefined;
-
-	if (existing) {
-		db.prepare(`
-      UPDATE headings
-      SET title = ?, position = ?, updated_at = ?, updated_by = ?
-      WHERE things_id = ?
-    `).run(title, position, now, userId, thingsId);
-		return existing.id;
-	} else {
-		const id = crypto.randomUUID();
-		db.prepare(`
-      INSERT INTO headings (id, things_id, title, position, updated_at, updated_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, thingsId, title, position, now, userId, now);
-		return id;
-	}
-}
-
-export function deleteHeading(
-	db: DB,
-	thingsId: string,
-	userId: string,
-): boolean {
-	const existing = db
-		.prepare(`SELECT id FROM headings WHERE things_id = ?`)
-		.get(thingsId) as { id: string } | undefined;
-	if (!existing) return false;
-
-	const now = new Date().toISOString();
-	const deleteId = crypto.randomUUID();
-
-	db.prepare(`
-    INSERT INTO deleted_items (id, things_id, item_type, deleted_at, deleted_by)
-    VALUES (?, ?, 'heading', ?, ?)
-  `).run(deleteId, thingsId, now, userId);
-
-	db.prepare(`DELETE FROM headings WHERE things_id = ?`).run(thingsId);
-	return true;
 }
 
 // =============================================================================
@@ -221,316 +233,248 @@ export function deleteHeading(
 
 export function getAllTodos(db: DB) {
 	const rows = db
-		.prepare(`
-    SELECT
-      id, things_id as thingsId, title, notes, due_date as dueDate,
-      tags, status, heading_id as headingId, position,
-      updated_at as updatedAt, updated_by as updatedBy, created_at as createdAt
+		.prepare(
+			`
+    SELECT id, title, notes, due_date, tags, status, position,
+           edited_at, updated_at, updated_by
     FROM todos
     ORDER BY position
-  `)
-		.all() as Array<{
-		id: string;
-		thingsId: string;
-		title: string;
-		notes: string;
-		dueDate: string | null;
-		tags: string;
-		status: string;
-		headingId: string | null;
-		position: number;
-		updatedAt: string;
-		updatedBy: string;
-		createdAt: string;
-	}>;
+  `,
+		)
+		.all() as DbTodoRow[];
 
 	return rows.map((row) => ({
-		...row,
+		id: row.id,
+		title: row.title,
+		notes: row.notes,
+		dueDate: row.due_date,
 		tags: JSON.parse(row.tags),
+		status: row.status,
+		position: row.position,
+		editedAt: row.edited_at,
+		updatedAt: row.updated_at,
+	}));
+}
+
+export function getAllTodosWithMeta(db: DB) {
+	const rows = db
+		.prepare(
+			`
+    SELECT id, title, notes, due_date, tags, status, position,
+           edited_at, updated_at, updated_by
+    FROM todos
+    ORDER BY position
+  `,
+		)
+		.all() as DbTodoRow[];
+
+	return rows.map((row) => ({
+		id: row.id,
+		title: row.title,
+		notes: row.notes,
+		dueDate: row.due_date,
+		tags: JSON.parse(row.tags),
+		status: row.status,
+		position: row.position,
+		editedAt: row.edited_at,
+		updatedAt: row.updated_at,
+		updatedBy: row.updated_by,
 	}));
 }
 
 export function getTodosSince(db: DB, since: string) {
 	const rows = db
-		.prepare(`
-    SELECT
-      id, things_id as thingsId, title, notes, due_date as dueDate,
-      tags, status, heading_id as headingId, position,
-      updated_at as updatedAt, updated_by as updatedBy, created_at as createdAt
+		.prepare(
+			`
+    SELECT id, title, notes, due_date, tags, status, position,
+           edited_at, updated_at, updated_by
     FROM todos
     WHERE updated_at > ?
     ORDER BY position
-  `)
-		.all(since) as Array<{
-		id: string;
-		thingsId: string;
-		title: string;
-		notes: string;
-		dueDate: string | null;
-		tags: string;
-		status: string;
-		headingId: string | null;
-		position: number;
-		updatedAt: string;
-		updatedBy: string;
-		createdAt: string;
-	}>;
+  `,
+		)
+		.all(since) as DbTodoRow[];
 
 	return rows.map((row) => ({
-		...row,
+		id: row.id,
+		title: row.title,
+		notes: row.notes,
+		dueDate: row.due_date,
 		tags: JSON.parse(row.tags),
+		status: row.status,
+		position: row.position,
+		editedAt: row.edited_at,
+		updatedAt: row.updated_at,
 	}));
+}
+
+export function getTodoByServerId(db: DB, serverId: string) {
+	const row = db
+		.prepare(
+			`
+    SELECT id, title, notes, due_date, tags, status, position,
+           edited_at, updated_at, updated_by
+    FROM todos
+    WHERE id = ?
+  `,
+		)
+		.get(serverId) as DbTodoRow | undefined;
+
+	if (!row) return null;
+	return {
+		id: row.id,
+		title: row.title,
+		notes: row.notes,
+		dueDate: row.due_date,
+		tags: JSON.parse(row.tags),
+		status: row.status,
+		position: row.position,
+		editedAt: row.edited_at,
+		updatedAt: row.updated_at,
+		updatedBy: row.updated_by,
+	};
 }
 
 export function upsertTodo(
 	db: DB,
-	thingsId: string,
+	serverId: string,
 	data: {
 		title: string;
 		notes: string;
 		dueDate: string | null;
 		tags: string[];
 		status: "open" | "completed" | "canceled";
-		headingId: string | null;
 		position: number;
+		editedAt: string;
 	},
 	userId: string,
-): string {
+): void {
 	const now = new Date().toISOString();
 	const tagsJson = JSON.stringify(data.tags);
+
 	const existing = db
-		.prepare(`SELECT id FROM todos WHERE things_id = ?`)
-		.get(thingsId) as { id: string } | undefined;
+		.prepare(`SELECT id FROM todos WHERE id = ?`)
+		.get(serverId) as { id: string } | undefined;
 
 	if (existing) {
-		db.prepare(`
+		db.prepare(
+			`
       UPDATE todos
       SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
-          heading_id = ?, position = ?, updated_at = ?, updated_by = ?
-      WHERE things_id = ?
-    `).run(
+          position = ?, edited_at = ?, updated_at = ?, updated_by = ?
+      WHERE id = ?
+    `,
+		).run(
 			data.title,
 			data.notes,
 			data.dueDate,
 			tagsJson,
 			data.status,
-			data.headingId,
 			data.position,
+			data.editedAt,
 			now,
 			userId,
-			thingsId,
+			serverId,
 		);
-		return existing.id;
-	} else {
-		const id = crypto.randomUUID();
-		db.prepare(`
-      INSERT INTO todos (id, things_id, title, notes, due_date, tags, status, heading_id, position, updated_at, updated_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-			id,
-			thingsId,
-			data.title,
-			data.notes,
-			data.dueDate,
-			tagsJson,
-			data.status,
-			data.headingId,
-			data.position,
-			now,
-			userId,
-			now,
-		);
-		return id;
-	}
-}
-
-/**
- * Upsert todo using server ID (preferred for cross-device sync)
- * - If serverId provided: update existing record by serverId
- * - If no serverId: create new record
- */
-export function upsertTodoByServerId(
-	db: DB,
-	serverId: string | undefined,
-	data: {
-		thingsId: string;
-		title: string;
-		notes: string;
-		dueDate: string | null;
-		tags: string[];
-		status: "open" | "completed" | "canceled";
-		headingId: string | null;
-		position: number;
-	},
-	userId: string,
-): string {
-	const now = new Date().toISOString();
-	const tagsJson = JSON.stringify(data.tags);
-
-	if (serverId) {
-		// Update existing by server ID
-		const existing = db
-			.prepare(`SELECT id FROM todos WHERE id = ?`)
-			.get(serverId) as { id: string } | undefined;
-
-		if (existing) {
-			db.prepare(`
-        UPDATE todos
-        SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
-            heading_id = ?, position = ?, updated_at = ?, updated_by = ?
-        WHERE id = ?
-      `).run(
-				data.title,
-				data.notes,
-				data.dueDate,
-				tagsJson,
-				data.status,
-				data.headingId,
-				data.position,
-				now,
-				userId,
-				serverId,
-			);
-			return serverId;
-		}
-		// If serverId provided but not found, fall through to create
+		return;
 	}
 
-	// Check if todo with this thingsId already exists
-	const existingByThingsId = db
-		.prepare(`SELECT id FROM todos WHERE things_id = ?`)
-		.get(data.thingsId) as { id: string } | undefined;
-
-	if (existingByThingsId) {
-		// Update existing todo found by thingsId
-		db.prepare(`
-      UPDATE todos
-      SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
-          heading_id = ?, position = ?, updated_at = ?, updated_by = ?
-      WHERE things_id = ?
-    `).run(
-			data.title,
-			data.notes,
-			data.dueDate,
-			tagsJson,
-			data.status,
-			data.headingId,
-			data.position,
-			now,
-			userId,
-			data.thingsId,
-		);
-		return existingByThingsId.id;
-	}
-
-	// Create new record
-	const id = serverId || crypto.randomUUID();
-	db.prepare(`
-    INSERT INTO todos (id, things_id, title, notes, due_date, tags, status, heading_id, position, updated_at, updated_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-		id,
-		data.thingsId,
+	db.prepare(
+		`
+    INSERT INTO todos (id, title, notes, due_date, tags, status, position, edited_at, updated_at, created_by, updated_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+	).run(
+		serverId,
 		data.title,
 		data.notes,
 		data.dueDate,
 		tagsJson,
 		data.status,
-		data.headingId,
 		data.position,
+		data.editedAt,
 		now,
 		userId,
-		now,
+		userId,
 	);
-	return id;
 }
 
-export function deleteTodo(db: DB, thingsId: string, userId: string): boolean {
+export function deleteTodoByServerId(db: DB, serverId: string): boolean {
 	const existing = db
-		.prepare(`SELECT id, things_id FROM todos WHERE things_id = ?`)
-		.get(thingsId) as { id: string; things_id: string } | undefined;
+		.prepare(`SELECT id FROM todos WHERE id = ?`)
+		.get(serverId) as { id: string } | undefined;
 	if (!existing) return false;
-
-	const now = new Date().toISOString();
-	const deleteId = crypto.randomUUID();
-
-	db.prepare(`
-    INSERT INTO deleted_items (id, things_id, item_type, deleted_at, deleted_by)
-    VALUES (?, ?, 'todo', ?, ?)
-  `).run(deleteId, thingsId, now, userId);
-
-	db.prepare(`DELETE FROM todos WHERE things_id = ?`).run(thingsId);
-	return true;
-}
-
-export function deleteTodoByServerId(
-	db: DB,
-	serverId: string,
-	userId: string,
-): boolean {
-	const existing = db
-		.prepare(`SELECT id, things_id FROM todos WHERE id = ?`)
-		.get(serverId) as { id: string; things_id: string } | undefined;
-	if (!existing) return false;
-
-	const now = new Date().toISOString();
-	const deleteId = crypto.randomUUID();
-
-	// Track deletion using server ID (for sync purposes)
-	db.prepare(`
-    INSERT INTO deleted_items (id, things_id, item_type, deleted_at, deleted_by)
-    VALUES (?, ?, 'todo', ?, ?)
-  `).run(deleteId, serverId, now, userId);
 
 	db.prepare(`DELETE FROM todos WHERE id = ?`).run(serverId);
 	return true;
 }
 
+export function getDeletedByServerId(
+	db: DB,
+	serverId: string,
+): { deletedAt: string; deletedBy: string } | null {
+	const row = db
+		.prepare(
+			`SELECT deleted_at as deletedAt, deleted_by as deletedBy FROM deleted_items WHERE server_id = ? ORDER BY deleted_at DESC LIMIT 1`,
+		)
+		.get(serverId) as { deletedAt: string; deletedBy: string } | undefined;
+	return row || null;
+}
+
+export function recordDeletion(
+	db: DB,
+	serverId: string,
+	deletedAt: string,
+	userId: string,
+): void {
+	// Keep only the latest deletion record per serverId
+	db.prepare(`DELETE FROM deleted_items WHERE server_id = ?`).run(serverId);
+	const deleteId = crypto.randomUUID();
+	const recordedAt = new Date().toISOString();
+	db.prepare(
+		`
+    INSERT INTO deleted_items (id, server_id, deleted_at, recorded_at, deleted_by)
+    VALUES (?, ?, ?, ?, ?)
+  `,
+	).run(deleteId, serverId, deletedAt, recordedAt, userId);
+}
+
+export function clearDeletion(db: DB, serverId: string): void {
+	db.prepare(`DELETE FROM deleted_items WHERE server_id = ?`).run(serverId);
+}
+
 export function getDeletedSince(
 	db: DB,
 	since: string,
-): { todos: string[]; headings: string[] } {
-	const rows = db
-		.prepare(`
-    SELECT things_id, item_type FROM deleted_items WHERE deleted_at > ?
-  `)
-		.all(since) as { things_id: string; item_type: "todo" | "heading" }[];
-
-	return {
-		todos: rows.filter((r) => r.item_type === "todo").map((r) => r.things_id),
-		headings: rows
-			.filter((r) => r.item_type === "heading")
-			.map((r) => r.things_id),
-	};
+): { serverId: string; deletedAt: string }[] {
+	// Filter by recorded_at (server time) not deleted_at (client time)
+	// This ensures deletions are propagated even if client clock was behind
+	return db
+		.prepare(
+			`
+    SELECT server_id as serverId, deleted_at as deletedAt
+    FROM deleted_items
+    WHERE recorded_at > ?
+  `,
+		)
+		.all(since) as { serverId: string; deletedAt: string }[];
 }
 
 // =============================================================================
 // Reset user data
 // =============================================================================
 
-/**
- * Delete all data created/updated by a user
- * Used for clean reset when client wants to start fresh
- */
 export function resetUserData(
 	db: DB,
 	userId: string,
-): { deletedTodos: number; deletedHeadings: number } {
-	// Delete all todos updated by this user
+): { deletedTodos: number } {
 	const todoResult = db
-		.prepare(`DELETE FROM todos WHERE updated_by = ?`)
-		.run(userId);
+		.prepare(`DELETE FROM todos WHERE updated_by = ? OR created_by = ?`)
+		.run(userId, userId);
 
-	// Delete all headings updated by this user
-	const headingResult = db
-		.prepare(`DELETE FROM headings WHERE updated_by = ?`)
-		.run(userId);
-
-	// Clear deleted_items tracking for this user
 	db.prepare(`DELETE FROM deleted_items WHERE deleted_by = ?`).run(userId);
 
 	return {
 		deletedTodos: todoResult.changes,
-		deletedHeadings: headingResult.changes,
 	};
 }

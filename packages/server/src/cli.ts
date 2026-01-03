@@ -17,8 +17,8 @@ import updateNotifier from "update-notifier";
 import { authMiddleware } from "./auth.js";
 import {
 	createUser,
-	getAllHeadings,
 	getAllTodos,
+	getAllTodosWithMeta,
 	initDatabase,
 	listUsers,
 	userExists,
@@ -448,7 +448,6 @@ program
 
 		// Delete user and their data
 		db.prepare("DELETE FROM todos WHERE updated_by = ?").run(user.id);
-		db.prepare("DELETE FROM headings WHERE updated_by = ?").run(user.id);
 		db.prepare("DELETE FROM deleted_items WHERE deleted_by = ?").run(user.id);
 		db.prepare("DELETE FROM users WHERE id = ?").run(user.id);
 
@@ -464,7 +463,7 @@ program
 	.option("-u, --user <name>", "Filter by username")
 	.action(async (options) => {
 		const db = initDatabase();
-		const todos = getAllTodos(db);
+		const todos = getAllTodosWithMeta(db);
 		const users = listUsers(db);
 
 		// Create user lookup map
@@ -533,25 +532,23 @@ program
 // =============================================================================
 program
 	.command("reset")
-	.description("Delete all todos and headings (keeps users)")
+	.description("Delete all todos (keeps users)")
 	.action(async () => {
 		const db = initDatabase();
 
 		const todos = getAllTodos(db);
-		const headings = getAllHeadings(db);
 
-		if (todos.length === 0 && headings.length === 0) {
+		if (todos.length === 0) {
 			console.log(chalk.yellow("\nNo data to reset.\n"));
 			return;
 		}
 
 		console.log(chalk.bold("\n🔄 Reset Server Data\n"));
 		console.log(`  ${chalk.dim("Todos:")} ${todos.length}`);
-		console.log(`  ${chalk.dim("Headings:")} ${headings.length}`);
 		console.log();
 
 		const confirmed = await confirm({
-			message: "Delete all todos and headings? Users will be kept.",
+			message: "Delete all todos? Users will be kept.",
 			default: false,
 		});
 
@@ -561,12 +558,9 @@ program
 		}
 
 		db.prepare("DELETE FROM todos").run();
-		db.prepare("DELETE FROM headings").run();
 		db.prepare("DELETE FROM deleted_items").run();
 
-		console.log(
-			chalk.green("\n✅ All todos and headings deleted. Users preserved.\n"),
-		);
+		console.log(chalk.green("\n✅ All todos deleted. Users preserved.\n"));
 	});
 
 // =============================================================================

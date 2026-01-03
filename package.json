@@ -12,7 +12,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.10",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.16"
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {

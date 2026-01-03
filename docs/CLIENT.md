@@ -64,6 +64,8 @@ You'll be prompted for:
 
 Configuration is saved to `~/.shared-things/config.json`.
 
+> The project must be empty when you run `init`.
+
 ## 5. Test Sync
 
 Run a manual sync to verify everything works:
@@ -77,7 +79,7 @@ shared-things sync
 Install the launchd daemon for automatic syncing:
 
 ```bash
-shared-things install
+shared-things start
 ```
 
 This creates a LaunchAgent that:
@@ -90,12 +92,17 @@ This creates a LaunchAgent that:
 | Command | Description |
 |---------|-------------|
 | `shared-things init` | Setup wizard |
-| `shared-things install` | Install launchd daemon |
-| `shared-things uninstall` | Remove launchd daemon |
+| `shared-things start` | Start launchd daemon |
+| `shared-things stop` | Stop launchd daemon |
 | `shared-things status` | Show sync status |
 | `shared-things sync` | Manual one-time sync |
-| `shared-things logs` | Show daemon logs |
+| `shared-things logs` | Show sync logs |
 | `shared-things logs -f` | Follow logs in real-time |
+| `shared-things conflicts [--all]` | Show conflict history |
+| `shared-things repair` | Diagnose state issues (no auto-fix) |
+| `shared-things reset --local` | Clear local state |
+| `shared-things reset --server` | Clear server data |
+| `shared-things doctor` | Comprehensive health check |
 
 ## File Locations
 
@@ -103,7 +110,7 @@ This creates a LaunchAgent that:
 |------|---------|
 | `~/.shared-things/config.json` | Configuration |
 | `~/.shared-things/state.json` | Last sync state |
-| `~/.shared-things/daemon.log` | Daemon logs |
+| `~/.shared-things/sync.log` | Sync logs |
 | `~/Library/LaunchAgents/com.shared-things.daemon.plist` | LaunchAgent |
 
 ## Troubleshooting
@@ -152,10 +159,10 @@ The daemon can **create** new todos but has limitations for **updating** existin
 ### Reset everything
 
 ```bash
-shared-things uninstall
+shared-things stop
 rm -rf ~/.shared-things
 shared-things init
-shared-things install
+shared-things start
 ```
 
 ## How Sync Works

@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   ci:
-    name: Lint, Typecheck & Build
+    name: Lint, Typecheck, Build & Test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -42,3 +42,6 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Test
+        run: pnpm test

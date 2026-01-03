@@ -26,6 +26,8 @@ shared-things init
 ```
 That's it. Follow the prompts.
 
+> **Note:** The Things project must be empty when you run `init`.
+
 ## Features
 
 - 🔄 **Real-time sync** - Changes propagate within 30 seconds
@@ -59,7 +61,7 @@ shared-things init
 ### After Setup
 
 ```bash
-shared-things install   # Start daemon (auto-runs on login)
+shared-things start     # Start daemon (auto-runs on login)
 shared-things status    # Check sync status
 shared-things logs -f   # Follow sync logs
 ```
@@ -69,13 +71,16 @@ shared-things logs -f   # Follow sync logs
 | Command | Description |
 |---------|-------------|
 | `init` | Setup wizard |
-| `install` | Install launchd daemon (auto-starts on login) |
-| `uninstall` | Remove launchd daemon |
+| `start` | Start launchd daemon (auto-starts on login) |
+| `stop` | Stop launchd daemon |
 | `status` | Show sync status & last sync time |
 | `sync` | Force immediate sync |
 | `logs [-f]` | Show logs (`-f` to follow) |
-| `reset [--server]` | Reset local state (`--server` clears server too) |
-| `purge` | Remove all local config |
+| `conflicts [--all]` | Show conflict history |
+| `repair` | Diagnose state issues (no auto-fix) |
+| `reset --local` | Clear local state (re-sync from server) |
+| `reset --server` | Clear server data for this user |
+| `doctor` | Comprehensive health check |
 
 ## Server Setup
 
@@ -143,8 +148,8 @@ things.yourdomain.com {
 
 | Synced | Not Synced |
 |--------|------------|
-| Todo title, notes, due date, tags | Completed todos |
-| Headings | Checklist items |
+| Todo title, notes, due date, tags, status | Checklist items |
+|  | Headings, Areas |
 | | Areas |
 
 > **Note:** The project must exist in each user's Things app. Only items within that project sync.

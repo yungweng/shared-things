@@ -2,25 +2,27 @@
  * API routes
  */
 
+import * as crypto from "node:crypto";
 import type {
 	Conflict,
 	ProjectState,
 	PushRequest,
 	PushResponse,
+	Todo,
 } from "@shared-things/common";
 import type { FastifyInstance } from "fastify";
 import {
+	clearDeletion,
 	type DB,
-	deleteHeading,
 	deleteTodoByServerId,
-	getAllHeadings,
 	getAllTodos,
+	getDeletedByServerId,
 	getDeletedSince,
-	getHeadingsSince,
+	getTodoByServerId,
 	getTodosSince,
+	recordDeletion,
 	resetUserData,
-	upsertHeading,
-	upsertTodoByServerId,
+	upsertTodo,
 } from "./db.js";
 
 export function registerRoutes(app: FastifyInstance, db: DB) {
@@ -31,11 +33,9 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 
 	// Get full project state
 	app.get("/state", async (_request): Promise<ProjectState> => {
-		const headings = getAllHeadings(db);
 		const todos = getAllTodos(db);
 
 		return {
-			headings: headings as ProjectState["headings"],
 			todos: todos as ProjectState["todos"],
 			syncedAt: new Date().toISOString(),
 		};
@@ -49,18 +49,13 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 			return { error: 'Missing "since" query parameter', code: "BAD_REQUEST" };
 		}
 
-		const headings = getHeadingsSince(db, since);
 		const todos = getTodosSince(db, since);
 		const deleted = getDeletedSince(db, since);
 
 		return {
-			headings: {
-				upserted: headings,
-				deleted: deleted.headings,
-			},
 			todos: {
 				upserted: todos,
-				deleted: deleted.todos,
+				deleted,
 			},
 			syncedAt: new Date().toISOString(),
 		};
@@ -70,61 +65,129 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 	app.post<{ Body: PushRequest }>(
 		"/push",
 		async (request, reply): Promise<PushResponse> => {
-			const { headings, todos } = request.body;
+			const { todos } = request.body;
 			const userId = request.user.id;
 			const conflicts: Conflict[] = [];
+			const mappings: PushResponse["mappings"] = [];
 
 			try {
-				// Process heading deletions first
-				for (const thingsId of headings.deleted) {
-					deleteHeading(db, thingsId, userId);
-				}
+				const transaction = db.transaction(() => {
+					// Process todo deletions (by server ID)
+					for (const deletion of todos.deleted) {
+						const existing = getTodoByServerId(db, deletion.serverId);
+						if (!existing) {
+							const existingDeletion = getDeletedByServerId(
+								db,
+								deletion.serverId,
+							);
+							if (
+								!existingDeletion ||
+								compareIso(deletion.deletedAt, existingDeletion.deletedAt) > 0
+							) {
+								recordDeletion(
+									db,
+									deletion.serverId,
+									deletion.deletedAt,
+									userId,
+								);
+							}
+							continue;
+						}
 
-				// Process heading upserts
-				for (const heading of headings.upserted) {
-					upsertHeading(
-						db,
-						heading.thingsId,
-						heading.title,
-						heading.position,
-						userId,
-					);
-				}
+						const shouldDelete = shouldApplyChange(
+							deletion.deletedAt,
+							existing.editedAt,
+							userId,
+							existing.updatedBy,
+						);
 
-				// Process todo deletions (by server ID)
-				for (const serverId of todos.deleted) {
-					deleteTodoByServerId(db, serverId, userId);
-				}
+						if (!shouldDelete) {
+							conflicts.push({
+								serverId: deletion.serverId,
+								reason: "Remote edit was newer",
+								serverTodo: toTodo(existing),
+								clientDeletedAt: deletion.deletedAt,
+							});
+							continue;
+						}
 
-				// Process todo upserts
-				for (const todo of todos.upserted) {
-					// Find heading ID if headingThingsId is provided
-					let headingId: string | null = null;
-					if (todo.headingId) {
-						// todo.headingId here is actually thingsId of the heading
-						const headingRow = db
-							.prepare(`SELECT id FROM headings WHERE things_id = ?`)
-							.get(todo.headingId) as { id: string } | undefined;
-						headingId = headingRow?.id || null;
+						deleteTodoByServerId(db, deletion.serverId);
+						recordDeletion(db, deletion.serverId, deletion.deletedAt, userId);
 					}
 
-					// Use serverId for updates if provided, otherwise create new
-					upsertTodoByServerId(
-						db,
-						todo.serverId,
-						{
-							thingsId: todo.thingsId,
-							title: todo.title,
-							notes: todo.notes,
-							dueDate: todo.dueDate,
-							tags: todo.tags,
-							status: todo.status,
-							headingId,
-							position: todo.position,
-						},
-						userId,
-					);
-				}
+					// Process todo upserts
+					for (const todo of todos.upserted) {
+						const serverId = todo.serverId || crypto.randomUUID();
+						const position =
+							typeof todo.position === "number" &&
+							Number.isFinite(todo.position)
+								? todo.position
+								: 0;
+
+						const existingDeletion = getDeletedByServerId(db, serverId);
+						if (existingDeletion) {
+							// Use same tiebreaker logic as edit-vs-edit
+							const editWins = shouldApplyChange(
+								todo.editedAt,
+								existingDeletion.deletedAt,
+								userId,
+								existingDeletion.deletedBy,
+							);
+							if (!editWins) {
+								conflicts.push({
+									serverId,
+									reason: "Remote delete was newer",
+									serverTodo: null,
+									clientTodo: todo,
+								});
+								continue;
+							}
+							clearDeletion(db, serverId);
+						}
+
+						const existing = getTodoByServerId(db, serverId);
+						if (existing) {
+							const shouldApply = shouldApplyChange(
+								todo.editedAt,
+								existing.editedAt,
+								userId,
+								existing.updatedBy,
+							);
+							if (!shouldApply) {
+								conflicts.push({
+									serverId,
+									reason: "Remote edit was newer",
+									serverTodo: toTodo(existing),
+									clientTodo: todo,
+								});
+								continue;
+							}
+						} else if (todo.serverId) {
+							// If serverId provided but doesn't exist, keep it for idempotency
+						}
+
+						upsertTodo(
+							db,
+							serverId,
+							{
+								title: todo.title,
+								notes: todo.notes,
+								dueDate: todo.dueDate,
+								tags: todo.tags,
+								status: todo.status,
+								position,
+								editedAt: todo.editedAt,
+							},
+							userId,
+						);
+
+						if (!todo.serverId && todo.clientId) {
+							mappings?.push({ serverId, clientId: todo.clientId });
+						}
+					}
+				});
+
+				transaction();
 			} catch (err) {
 				const error = err as Error;
 				// Check for UNIQUE constraint violation
@@ -140,16 +203,15 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 			}
 
 			// Return current state
-			const currentHeadings = getAllHeadings(db);
 			const currentTodos = getAllTodos(db);
 
 			return {
 				state: {
-					headings: currentHeadings as ProjectState["headings"],
 					todos: currentTodos as ProjectState["todos"],
 					syncedAt: new Date().toISOString(),
 				},
 				conflicts,
+				mappings: mappings?.length ? mappings : undefined,
 			};
 		},
 	);
@@ -163,8 +225,47 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 			success: true,
 			deleted: {
 				todos: result.deletedTodos,
-				headings: result.deletedHeadings,
 			},
 		};
 	});
+}
+
+function compareIso(a: string, b: string): number {
+	return new Date(a).getTime() - new Date(b).getTime();
+}
+
+function shouldApplyChange(
+	incomingEditedAt: string,
+	storedEditedAt: string,
+	incomingUserId: string,
+	storedUserId: string,
+): boolean {
+	const diff = compareIso(incomingEditedAt, storedEditedAt);
+	if (diff > 0) return true;
+	if (diff < 0) return false;
+	return incomingUserId > storedUserId;
+}
+
+function toTodo(todo: {
+	id: string;
+	title: string;
+	notes: string;
+	dueDate: string | null;
+	tags: string[];
+	status: "open" | "completed" | "canceled";
+	position: number;
+	editedAt: string;
+	updatedAt: string;
+}): Todo {
+	return {
+		id: todo.id,
+		title: todo.title,
+		notes: todo.notes,
+		dueDate: todo.dueDate,
+		tags: todo.tags,
+		status: todo.status,
+		position: todo.position,
+		editedAt: todo.editedAt,
+		updatedAt: todo.updatedAt,
+	};
 }
