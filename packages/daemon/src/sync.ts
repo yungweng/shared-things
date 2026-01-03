@@ -612,9 +612,13 @@ async function applyRemoteChanges(
 			continue;
 		}
 
+		// Apply remote update if:
+		// - No local state (first sync of this item), OR
+		// - Remote editedAt >= local editedAt (server already resolved ties via userId)
+		// The server only sends items in delta that should be applied.
 		if (
 			!localStateTodo ||
-			compareIso(remoteTodo.editedAt, localStateTodo.editedAt) > 0
+			compareIso(remoteTodo.editedAt, localStateTodo.editedAt) >= 0
 		) {
 			updateTodo(authToken, localTodo.thingsId, {
 				title: remoteTodo.title,
@@ -649,7 +653,9 @@ async function applyRemoteChanges(
 		}
 		if (!localStateTodo) continue;
 
-		if (compareIso(deletion.deletedAt, localStateTodo.editedAt) <= 0) {
+		// Skip if local edit is strictly newer than the delete timestamp
+		// (If equal, server already resolved via tiebreaker - trust server's delta)
+		if (compareIso(deletion.deletedAt, localStateTodo.editedAt) < 0) {
 			continue;
 		}
 
