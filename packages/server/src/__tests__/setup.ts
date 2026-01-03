@@ -61,11 +61,12 @@ function initTestDatabase(dbPath: string): DB {
 			id TEXT PRIMARY KEY,
 			server_id TEXT NOT NULL,
 			deleted_at TEXT NOT NULL,
+			recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
 			deleted_by TEXT NOT NULL REFERENCES users(id)
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_todos_updated ON todos(updated_at);
-		CREATE INDEX IF NOT EXISTS idx_deleted_at ON deleted_items(deleted_at);
+		CREATE INDEX IF NOT EXISTS idx_deleted_recorded ON deleted_items(recorded_at);
 	`);
 
 	return db;

@@ -64,11 +64,12 @@ export function initDatabase(): DB {
       id TEXT PRIMARY KEY,
       server_id TEXT NOT NULL,
       deleted_at TEXT NOT NULL,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_by TEXT NOT NULL REFERENCES users(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_todos_updated ON todos(updated_at);
-    CREATE INDEX IF NOT EXISTS idx_deleted_at ON deleted_items(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_deleted_recorded ON deleted_items(recorded_at);
   `);
 
 	return db;
@@ -418,12 +419,13 @@ export function recordDeletion(
 	// Keep only the latest deletion record per serverId
 	db.prepare(`DELETE FROM deleted_items WHERE server_id = ?`).run(serverId);
 	const deleteId = crypto.randomUUID();
+	const recordedAt = new Date().toISOString();
 	db.prepare(
 		`
-    INSERT INTO deleted_items (id, server_id, deleted_at, deleted_by)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO deleted_items (id, server_id, deleted_at, recorded_at, deleted_by)
+    VALUES (?, ?, ?, ?, ?)
   `,
-	).run(deleteId, serverId, deletedAt, userId);
+	).run(deleteId, serverId, deletedAt, recordedAt, userId);
 }
 
 export function clearDeletion(db: DB, serverId: string): void {
@@ -434,12 +436,14 @@ export function getDeletedSince(
 	db: DB,
 	since: string,
 ): { serverId: string; deletedAt: string }[] {
+	// Filter by recorded_at (server time) not deleted_at (client time)
+	// This ensures deletions are propagated even if client clock was behind
 	return db
 		.prepare(
 			`
     SELECT server_id as serverId, deleted_at as deletedAt
     FROM deleted_items
-    WHERE deleted_at > ?
+    WHERE recorded_at > ?
   `,
 		)
 		.all(since) as { serverId: string; deletedAt: string }[];

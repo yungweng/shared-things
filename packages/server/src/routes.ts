@@ -126,8 +126,13 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 
 						const existingDeletion = getDeletedByServerId(db, serverId);
 						if (existingDeletion) {
-							const editWins =
-								compareIso(todo.editedAt, existingDeletion.deletedAt) > 0;
+							// Use same tiebreaker logic as edit-vs-edit
+							const editWins = shouldApplyChange(
+								todo.editedAt,
+								existingDeletion.deletedAt,
+								userId,
+								existingDeletion.deletedBy,
+							);
 							if (!editWins) {
 								conflicts.push({
 									serverId,
