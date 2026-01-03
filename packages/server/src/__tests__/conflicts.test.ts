@@ -327,6 +327,257 @@ describe("Cross-user conflict resolution", () => {
 		});
 	});
 
+	describe("edit-vs-tombstone conflicts", () => {
+		it("should reject edit when todo was deleted with newer timestamp", async () => {
+			// User A creates todo
+			const serverId = await createTodoViaApi(ctx, ctx.userA.apiKey, {
+				title: "Will be deleted",
+				editedAt: timestamp(0),
+			});
+
+			// User B deletes with newer timestamp
+			await apiRequest(ctx, "POST", "/push", {
+				apiKey: ctx.userB.apiKey,
+				body: {
+					todos: {
+						upserted: [],
+						deleted: [
+							{
+								serverId,
+								deletedAt: timestamp(120000), // 2 minutes
+							},
+						],
+					},
+					lastSyncedAt: "1970-01-01T00:00:00.000Z",
+				},
+			});
+
+			// User A tries to edit with older timestamp (after deletion exists as tombstone)
+			const { status, data } = await apiRequest(ctx, "POST", "/push", {
+				apiKey: ctx.userA.apiKey,
+				body: {
+					todos: {
+						upserted: [
+							{
+								serverId,
+								clientId: serverId,
+								title: "Edited (but deleted)",
+								notes: "",
+								dueDate: null,
+								tags: [],
+								status: "open",
+								position: 0,
+								editedAt: timestamp(60000), // 1 minute (before delete)
+							},
+						],
+						deleted: [],
+					},
+					lastSyncedAt: "1970-01-01T00:00:00.000Z",
+				},
+			});
+
+			expect(status).toBe(200);
+			const response = data as {
+				conflicts: Array<{ serverId: string; reason: string }>;
+			};
+			expect(response.conflicts).toHaveLength(1);
+			expect(response.conflicts[0].reason).toBe("Remote delete was newer");
+
+			// Todo should still be deleted
+			const stateResponse = await apiRequest(ctx, "GET", "/state", {
+				apiKey: ctx.userA.apiKey,
+			});
+			const state = stateResponse.data as { todos: Array<{ id: string }> };
+			expect(state.todos.find((t) => t.id === serverId)).toBeUndefined();
+		});
+
+		it("should resurrect deleted todo when edit is newer than deletion", async () => {
+			// User A creates todo
+			const serverId = await createTodoViaApi(ctx, ctx.userA.apiKey, {
+				title: "Will be resurrected",
+				editedAt: timestamp(0),
+			});
+
+			// User B deletes with older timestamp
+			await apiRequest(ctx, "POST", "/push", {
+				apiKey: ctx.userB.apiKey,
+				body: {
+					todos: {
+						upserted: [],
+						deleted: [
+							{
+								serverId,
+								deletedAt: timestamp(60000), // 1 minute
+							},
+						],
+					},
+					lastSyncedAt: "1970-01-01T00:00:00.000Z",
+				},
+			});
+
+			// Verify todo is deleted
+			const deletedState = await apiRequest(ctx, "GET", "/state", {
+				apiKey: ctx.userA.apiKey,
+			});
+			expect(
+				(deletedState.data as { todos: Array<{ id: string }> }).todos.find(
+					(t) => t.id === serverId,
+				),
+			).toBeUndefined();
+
+			// User A edits with newer timestamp - should resurrect
+			const { status, data } = await apiRequest(ctx, "POST", "/push", {
+				apiKey: ctx.userA.apiKey,
+				body: {
+					todos: {
+						upserted: [
+							{
+								serverId,
+								clientId: serverId,
+								title: "Resurrected!",
+								notes: "",
+								dueDate: null,
+								tags: [],
+								status: "open",
+								position: 0,
+								editedAt: timestamp(120000), // 2 minutes (after delete)
+							},
+						],
+						deleted: [],
+					},
+					lastSyncedAt: "1970-01-01T00:00:00.000Z",
+				},
+			});
+
+			expect(status).toBe(200);
+			const response = data as { conflicts: unknown[] };
+			expect(response.conflicts).toHaveLength(0);
+
+			// Todo should exist again
+			const stateResponse = await apiRequest(ctx, "GET", "/state", {
+				apiKey: ctx.userA.apiKey,
+			});
+			const state = stateResponse.data as {
+				todos: Array<{ id: string; title: string }>;
+			};
+			const todo = state.todos.find((t) => t.id === serverId);
+			expect(todo).toBeDefined();
+			expect(todo?.title).toBe("Resurrected!");
+		});
+	});
+
+	describe("timestamp tiebreaker", () => {
+		it("should use userId as tiebreaker when timestamps are equal", async () => {
+			const exactTime = timestamp(0);
+
+			// Determine which user has the higher UUID (will win tiebreaker)
+			const userAWins = ctx.userA.id > ctx.userB.id;
+			const winner = userAWins ? ctx.userA : ctx.userB;
+			const loser = userAWins ? ctx.userB : ctx.userA;
+
+			// Loser creates todo first
+			const serverId = await createTodoViaApi(ctx, loser.apiKey, {
+				title: "Original by loser",
+				editedAt: exactTime,
+			});
+
+			// Winner edits with SAME timestamp - should win due to higher userId
+			const { status, data } = await apiRequest(ctx, "POST", "/push", {
+				apiKey: winner.apiKey,
+				body: {
+					todos: {
+						upserted: [
+							{
+								serverId,
+								clientId: serverId,
+								title: "Winner edit",
+								notes: "",
+								dueDate: null,
+								tags: [],
+								status: "open",
+								position: 0,
+								editedAt: exactTime, // Same timestamp!
+							},
+						],
+						deleted: [],
+					},
+					lastSyncedAt: "1970-01-01T00:00:00.000Z",
+				},
+			});
+
+			expect(status).toBe(200);
+			const response = data as { conflicts: unknown[] };
+			// Winner should have no conflicts (higher userId wins)
+			expect(response.conflicts).toHaveLength(0);
+
+			const stateResponse = await apiRequest(ctx, "GET", "/state", {
+				apiKey: ctx.userA.apiKey,
+			});
+			const state = stateResponse.data as {
+				todos: Array<{ id: string; title: string }>;
+			};
+			const todo = state.todos.find((t) => t.id === serverId);
+			expect(todo?.title).toBe("Winner edit");
+		});
+
+		it("should reject edit from lower userId when timestamps are equal", async () => {
+			const exactTime = timestamp(0);
+
+			// Determine which user has the higher UUID (will win tiebreaker)
+			const userAWins = ctx.userA.id > ctx.userB.id;
+			const winner = userAWins ? ctx.userA : ctx.userB;
+			const loser = userAWins ? ctx.userB : ctx.userA;
+
+			// Winner creates todo first
+			const serverId = await createTodoViaApi(ctx, winner.apiKey, {
+				title: "Original by winner",
+				editedAt: exactTime,
+			});
+
+			// Loser tries to edit with SAME timestamp - should get conflict
+			const { status, data } = await apiRequest(ctx, "POST", "/push", {
+				apiKey: loser.apiKey,
+				body: {
+					todos: {
+						upserted: [
+							{
+								serverId,
+								clientId: serverId,
+								title: "Loser edit",
+								notes: "",
+								dueDate: null,
+								tags: [],
+								status: "open",
+								position: 0,
+								editedAt: exactTime, // Same timestamp!
+							},
+						],
+						deleted: [],
+					},
+					lastSyncedAt: "1970-01-01T00:00:00.000Z",
+				},
+			});
+
+			expect(status).toBe(200);
+			const response = data as {
+				conflicts: Array<{ serverId: string; reason: string }>;
+			};
+			// Loser should get conflict (lower userId loses)
+			expect(response.conflicts).toHaveLength(1);
+			expect(response.conflicts[0].reason).toBe("Remote edit was newer");
+
+			// Original should be preserved
+			const stateResponse = await apiRequest(ctx, "GET", "/state", {
+				apiKey: ctx.userA.apiKey,
+			});
+			const state = stateResponse.data as {
+				todos: Array<{ id: string; title: string }>;
+			};
+			const todo = state.todos.find((t) => t.id === serverId);
+			expect(todo?.title).toBe("Original by winner");
+		});
+	});
+
 	describe("simultaneous edits", () => {
 		it("should handle rapid concurrent edits consistently", async () => {
 			// Create base todo
