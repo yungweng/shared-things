@@ -16,6 +16,8 @@
     "build": "tsup",
     "dev": "tsx watch src/cli.ts start",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "pnpm build",
     "postinstall": "node scripts/postinstall.js || true"
   },
