@@ -131,19 +131,24 @@ function migrateDatabase(db: DB): void {
 			.prepare(`PRAGMA table_info(deleted_items)`)
 			.all() as Array<{ name: string }>;
 		const hasServerId = columns.some((col) => col.name === "server_id");
+		const hasRecordedAt = columns.some((col) => col.name === "recorded_at");
+
 		if (!hasServerId) {
+			// v1 -> v2 migration: rename things_id to server_id, add recorded_at
 			db.exec(`
         CREATE TABLE IF NOT EXISTS deleted_items_new (
           id TEXT PRIMARY KEY,
           server_id TEXT NOT NULL,
           deleted_at TEXT NOT NULL,
+          recorded_at TEXT NOT NULL,
           deleted_by TEXT NOT NULL
         );
       `);
 
+			// Use deleted_at as recorded_at for historical records
 			db.exec(`
-        INSERT INTO deleted_items_new (id, server_id, deleted_at, deleted_by)
-        SELECT id, things_id, deleted_at, deleted_by
+        INSERT INTO deleted_items_new (id, server_id, deleted_at, recorded_at, deleted_by)
+        SELECT id, things_id, deleted_at, deleted_at, deleted_by
         FROM deleted_items
         WHERE item_type = 'todo';
       `);
@@ -151,6 +156,12 @@ function migrateDatabase(db: DB): void {
 			db.exec(`
         DROP TABLE deleted_items;
         ALTER TABLE deleted_items_new RENAME TO deleted_items;
+      `);
+		} else if (!hasRecordedAt) {
+			// v2 -> v2.1 migration: add recorded_at column
+			db.exec(`
+        ALTER TABLE deleted_items ADD COLUMN recorded_at TEXT;
+        UPDATE deleted_items SET recorded_at = deleted_at WHERE recorded_at IS NULL;
       `);
 		}
 	}
