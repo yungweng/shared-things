@@ -245,6 +245,22 @@ export async function runSync(): Promise<{
 		conflictCount += remoteResult.conflicts.length;
 		appendConflicts(remoteResult.conflicts);
 
+		// Re-read Things state after applying remote changes so local state
+		// matches exactly what Things has (prevents false change detection)
+		if (pulled > 0) {
+			const refreshed = readCurrentTodos(config);
+			for (const todo of refreshed) {
+				const stored = localState.todos[todo.thingsId];
+				if (stored) {
+					stored.title = todo.title;
+					stored.notes = todo.notes;
+					stored.dueDate = todo.dueDate;
+					stored.tags = todo.tags;
+					stored.status = todo.status;
+				}
+			}
+		}
+
 		localState.lastSyncedAt = delta.syncedAt;
 		saveLocalState(localState);
 
@@ -296,12 +312,26 @@ export function applyDelta(delta: SyncDelta): void {
 			localState,
 		);
 
-		localState.lastSyncedAt = delta.syncedAt;
-		saveLocalState(localState);
-
+		// Re-read Things state after applying changes so local state matches
+		// exactly what Things has. This prevents the next sync from detecting
+		// false changes due to URL Scheme encoding differences.
 		if (result.applied > 0) {
+			const refreshed = readCurrentTodos(config);
+			for (const todo of refreshed) {
+				const stored = localState.todos[todo.thingsId];
+				if (stored) {
+					stored.title = todo.title;
+					stored.notes = todo.notes;
+					stored.dueDate = todo.dueDate;
+					stored.tags = todo.tags;
+					stored.status = todo.status;
+				}
+			}
 			logInfo(`Applied delta: ${result.applied} changes`);
 		}
+
+		localState.lastSyncedAt = delta.syncedAt;
+		saveLocalState(localState);
 		if (result.conflicts.length > 0) {
 			appendConflicts(result.conflicts);
 			notifyConflicts(result.conflicts.length);

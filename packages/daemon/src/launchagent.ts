@@ -98,6 +98,11 @@ export function startLaunchAgent(): void {
 		installLaunchAgent();
 		return;
 	}
+	const status = getLaunchAgentStatus();
+	if (status === "running") {
+		console.log("LaunchAgent is already running.");
+		return;
+	}
 	try {
 		execSync(`launchctl load "${PLIST_PATH}"`);
 		console.log("LaunchAgent started.");

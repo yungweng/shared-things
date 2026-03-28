@@ -14,8 +14,9 @@ import { applyDelta, runSync } from "./sync.js";
 import { ThingsWatcher } from "./watcher.js";
 import { WsClient } from "./ws-client.js";
 
-/** Ignore watcher events for this long after a sync completes */
-const COOLDOWN_MS = 3000;
+/** Ignore watcher events for this long after a sync/delta apply completes.
+ * Must be long enough for Things to finish writing WAL after AppleScript updates. */
+const COOLDOWN_MS = 5000;
 
 export class Daemon {
 	private watcher: ThingsWatcher;
