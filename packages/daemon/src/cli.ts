@@ -610,6 +610,116 @@ program
 	});
 
 // =============================================================================
+// update
+// =============================================================================
+program
+	.command("update")
+	.description("Pull latest changes, rebuild, and restart daemon")
+	.option("--reset", "Also reset state (keeps config, re-syncs from server)")
+	.action(async (options) => {
+		const { execSync: exec } = await import("node:child_process");
+
+		// Find repo root from the CLI script location
+		// dist/cli.js -> packages/daemon/dist/cli.js -> ../../.. = repo root
+		const cliPath = new URL(import.meta.url).pathname;
+		let repoRoot = path.dirname(cliPath);
+		// Walk up until we find pnpm-workspace.yaml
+		for (let i = 0; i < 5; i++) {
+			if (fs.existsSync(path.join(repoRoot, "pnpm-workspace.yaml"))) break;
+			repoRoot = path.dirname(repoRoot);
+		}
+		if (!fs.existsSync(path.join(repoRoot, "pnpm-workspace.yaml"))) {
+			console.error(
+				chalk.red("Could not find repo root. Are you running from the repo?"),
+			);
+			process.exit(1);
+		}
+
+		// 1. Stop daemon
+		const wasRunning = getLaunchAgentStatus() === "running";
+		if (wasRunning) {
+			console.log(chalk.dim("Stopping daemon..."));
+			try {
+				stopLaunchAgent();
+			} catch {}
+		}
+
+		// 2. Git pull
+		console.log(chalk.dim("Pulling latest changes..."));
+		try {
+			const pullOutput = exec("git pull", {
+				cwd: repoRoot,
+				encoding: "utf-8",
+			}).trim();
+			if (pullOutput.includes("Already up to date")) {
+				console.log(`  ${chalk.green("Already up to date")}`);
+			} else {
+				console.log(`  ${chalk.green("Updated")}`);
+			}
+		} catch (error) {
+			console.error(chalk.red(`Git pull failed: ${error}`));
+			process.exit(1);
+		}
+
+		// 3. Build
+		console.log(chalk.dim("Building..."));
+		try {
+			exec("pnpm install --frozen-lockfile 2>/dev/null || pnpm install", {
+				cwd: repoRoot,
+				stdio: "pipe",
+			});
+			exec("pnpm build", { cwd: repoRoot, stdio: "pipe" });
+			console.log(`  ${chalk.green("Build complete")}`);
+		} catch (error) {
+			console.error(chalk.red(`Build failed: ${error}`));
+			process.exit(1);
+		}
+
+		// 4. Reset state if requested (keeps config)
+		if (options.reset) {
+			console.log(chalk.dim("Resetting state..."));
+			const configDir = getConfigDir();
+			for (const file of ["state.json", "conflicts.json", "sync.log"]) {
+				const p = path.join(configDir, file);
+				if (fs.existsSync(p)) fs.unlinkSync(p);
+			}
+			writeInitialState();
+			console.log(`  ${chalk.green("State reset (config preserved)")}`);
+		}
+
+		// 5. Check if config needs new fields
+		if (configExists()) {
+			const config = loadConfig()!;
+			let configChanged = false;
+
+			if (!config.syncMode) {
+				config.syncMode = "project";
+				configChanged = true;
+			}
+			if (
+				config.fallbackPollIntervalSeconds === undefined ||
+				config.fallbackPollIntervalSeconds === null
+			) {
+				config.fallbackPollIntervalSeconds = 60;
+				configChanged = true;
+			}
+
+			if (configChanged) {
+				saveConfig(config);
+				console.log(`  ${chalk.yellow("Config migrated with new defaults")}`);
+			}
+		}
+
+		// 6. Restart daemon
+		if (wasRunning || options.reset) {
+			console.log(chalk.dim("Starting daemon..."));
+			installLaunchAgent();
+		}
+
+		console.log(chalk.green("\nUpdate complete!\n"));
+	});
+
+// =============================================================================
 // helpers
 // =============================================================================
 function formatTimeAgo(date: Date): string {
