@@ -11,7 +11,7 @@
     "build": "tsup",
     "dev": "tsx watch src/cli.ts start",
     "typecheck": "tsc --noEmit",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run"
   },
   "author": "yungweng",
   "license": "MIT",

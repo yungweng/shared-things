@@ -49,21 +49,7 @@ export function initDatabase(): DB {
 
 	const currentVersion = versionRow?.version ?? 0;
 
-	if (!versionRow) {
-		db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(4);
-	}
-
-	// Migration: add project_name column (v3 → v4)
-	if (currentVersion < 4) {
-		const cols = db.prepare("PRAGMA table_info(todos)").all() as {
-			name: string;
-		}[];
-		if (!cols.some((c) => c.name === "project_name")) {
-			db.exec("ALTER TABLE todos ADD COLUMN project_name TEXT");
-		}
-		db.prepare("UPDATE schema_version SET version = ?").run(4);
-	}
-
+	// Create tables first (before migrations)
 	db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -98,6 +84,19 @@ export function initDatabase(): DB {
     CREATE INDEX IF NOT EXISTS idx_todos_updated ON todos(updated_at);
     CREATE INDEX IF NOT EXISTS idx_deleted_recorded ON deleted_items(recorded_at);
   `);
+
+	// Migrations (run after tables exist)
+	if (!versionRow) {
+		db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(4);
+	} else if (currentVersion < 4) {
+		const cols = db.prepare("PRAGMA table_info(todos)").all() as {
+			name: string;
+		}[];
+		if (!cols.some((c) => c.name === "project_name")) {
+			db.exec("ALTER TABLE todos ADD COLUMN project_name TEXT");
+		}
+		db.prepare("UPDATE schema_version SET version = ?").run(4);
+	}
 
 	return db;
 }
