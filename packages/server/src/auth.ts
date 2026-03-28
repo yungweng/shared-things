@@ -24,13 +24,12 @@ export function authMiddleware(db: DB) {
 		reply: FastifyReply,
 		done: HookHandlerDoneFunction,
 	) => {
-		// Skip auth for health check
 		if (request.url === "/health") {
 			return done();
 		}
 
 		const authHeader = request.headers.authorization;
-		if (!authHeader || !authHeader.startsWith("Bearer ")) {
+		if (!authHeader?.startsWith("Bearer ")) {
 			reply.code(401).send({
 				error: "Missing or invalid authorization header",
 				code: "UNAUTHORIZED",

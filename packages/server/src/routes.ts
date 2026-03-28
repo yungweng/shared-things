@@ -1,5 +1,5 @@
 /**
- * API routes
+ * API routes (v3 — with WebSocket notification on push)
  */
 
 import * as crypto from "node:crypto";
@@ -8,6 +8,7 @@ import type {
 	ProjectState,
 	PushRequest,
 	PushResponse,
+	SyncDelta,
 	Todo,
 } from "@shared-things/common";
 import type { FastifyInstance } from "fastify";
@@ -24,44 +25,39 @@ import {
 	resetUserData,
 	upsertTodo,
 } from "./db.js";
+import type { ConnectionManager } from "./websocket.js";
 
-export function registerRoutes(app: FastifyInstance, db: DB) {
-	// Health check (no auth)
+export function registerRoutes(
+	app: FastifyInstance,
+	db: DB,
+	wsManager: ConnectionManager,
+) {
 	app.get("/health", async () => {
 		return { status: "ok", timestamp: new Date().toISOString() };
 	});
 
-	// Get full project state
-	app.get("/state", async (_request): Promise<ProjectState> => {
-		const todos = getAllTodos(db);
-
+	app.get("/state", async (): Promise<ProjectState> => {
 		return {
-			todos: todos as ProjectState["todos"],
+			todos: getAllTodos(db) as Todo[],
 			syncedAt: new Date().toISOString(),
 		};
 	});
 
-	// Get changes since timestamp
 	app.get<{ Querystring: { since: string } }>("/delta", async (request) => {
 		const { since } = request.query;
-
 		if (!since) {
 			return { error: 'Missing "since" query parameter', code: "BAD_REQUEST" };
 		}
 
-		const todos = getTodosSince(db, since);
-		const deleted = getDeletedSince(db, since);
-
 		return {
 			todos: {
-				upserted: todos,
-				deleted,
+				upserted: getTodosSince(db, since),
+				deleted: getDeletedSince(db, since),
 			},
 			syncedAt: new Date().toISOString(),
 		};
 	});
 
-	// Push changes
 	app.post<{ Body: PushRequest }>(
 		"/push",
 		async (request, reply): Promise<PushResponse> => {
@@ -70,9 +66,13 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 			const conflicts: Conflict[] = [];
 			const mappings: PushResponse["mappings"] = [];
 
+			// Track what changed for WebSocket notification
+			const changedServerIds: string[] = [];
+			const deletedItems: { serverId: string; deletedAt: string }[] = [];
+
 			try {
 				const transaction = db.transaction(() => {
-					// Process todo deletions (by server ID)
+					// Process deletions
 					for (const deletion of todos.deleted) {
 						const existing = getTodoByServerId(db, deletion.serverId);
 						if (!existing) {
@@ -90,18 +90,19 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 									deletion.deletedAt,
 									userId,
 								);
+								deletedItems.push(deletion);
 							}
 							continue;
 						}
 
-						const shouldDelete = shouldApplyChange(
-							deletion.deletedAt,
-							existing.editedAt,
-							userId,
-							existing.updatedBy,
-						);
-
-						if (!shouldDelete) {
+						if (
+							!shouldApplyChange(
+								deletion.deletedAt,
+								existing.editedAt,
+								userId,
+								existing.updatedBy,
+							)
+						) {
 							conflicts.push({
 								serverId: deletion.serverId,
 								reason: "Remote edit was newer",
@@ -113,9 +114,10 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 
 						deleteTodoByServerId(db, deletion.serverId);
 						recordDeletion(db, deletion.serverId, deletion.deletedAt, userId);
+						deletedItems.push(deletion);
 					}
 
-					// Process todo upserts
+					// Process upserts
 					for (const todo of todos.upserted) {
 						const serverId = todo.serverId || crypto.randomUUID();
 						const position =
@@ -126,14 +128,14 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 
 						const existingDeletion = getDeletedByServerId(db, serverId);
 						if (existingDeletion) {
-							// Use same tiebreaker logic as edit-vs-edit
-							const editWins = shouldApplyChange(
-								todo.editedAt,
-								existingDeletion.deletedAt,
-								userId,
-								existingDeletion.deletedBy,
-							);
-							if (!editWins) {
+							if (
+								!shouldApplyChange(
+									todo.editedAt,
+									existingDeletion.deletedAt,
+									userId,
+									existingDeletion.deletedBy,
+								)
+							) {
 								conflicts.push({
 									serverId,
 									reason: "Remote delete was newer",
@@ -147,13 +149,14 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 
 						const existing = getTodoByServerId(db, serverId);
 						if (existing) {
-							const shouldApply = shouldApplyChange(
-								todo.editedAt,
-								existing.editedAt,
-								userId,
-								existing.updatedBy,
-							);
-							if (!shouldApply) {
+							if (
+								!shouldApplyChange(
+									todo.editedAt,
+									existing.editedAt,
+									userId,
+									existing.updatedBy,
+								)
+							) {
 								conflicts.push({
 									serverId,
 									reason: "Remote edit was newer",
@@ -162,8 +165,6 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 								});
 								continue;
 							}
-						} else if (todo.serverId) {
-							// If serverId provided but doesn't exist, keep it for idempotency
 						}
 
 						upsertTodo(
@@ -176,10 +177,13 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 								tags: todo.tags,
 								status: todo.status,
 								position,
+								projectName: todo.projectName,
 								editedAt: todo.editedAt,
 							},
 							userId,
 						);
+
+						changedServerIds.push(serverId);
 
 						if (!todo.serverId && todo.clientId) {
 							mappings?.push({ serverId, clientId: todo.clientId });
@@ -190,43 +194,44 @@ export function registerRoutes(app: FastifyInstance, db: DB) {
 				transaction();
 			} catch (err) {
 				const error = err as Error;
-				// Check for UNIQUE constraint violation
 				if (error.message?.includes("UNIQUE constraint failed")) {
 					reply.status(409);
 					return {
 						error:
-							'Sync conflict: Server has data that conflicts with your local state. Run "shared-things reset --server" to start fresh.',
+							'Sync conflict: Run "shared-things reset --server" to start fresh.',
 						code: "SYNC_CONFLICT",
 					} as any;
 				}
 				throw err;
 			}
 
-			// Return current state
 			const currentTodos = getAllTodos(db);
+			const syncedAt = new Date().toISOString();
+
+			// Notify other connected clients via WebSocket
+			if (changedServerIds.length > 0 || deletedItems.length > 0) {
+				const upserted = currentTodos.filter((t) =>
+					changedServerIds.includes(t.id),
+				) as Todo[];
+
+				const delta: SyncDelta = {
+					todos: { upserted, deleted: deletedItems },
+					syncedAt,
+				};
+				wsManager.notifyOthers(userId, delta);
+			}
 
 			return {
-				state: {
-					todos: currentTodos as ProjectState["todos"],
-					syncedAt: new Date().toISOString(),
-				},
+				state: { todos: currentTodos as Todo[], syncedAt },
 				conflicts,
 				mappings: mappings?.length ? mappings : undefined,
 			};
 		},
 	);
 
-	// Reset user data (for clean fresh start)
 	app.delete("/reset", async (request) => {
-		const userId = request.user.id;
-		const result = resetUserData(db, userId);
-
-		return {
-			success: true,
-			deleted: {
-				todos: result.deletedTodos,
-			},
-		};
+		const result = resetUserData(db, request.user.id);
+		return { success: true, deleted: { todos: result.deletedTodos } };
 	});
 }
 
@@ -254,6 +259,7 @@ function toTodo(todo: {
 	tags: string[];
 	status: "open" | "completed" | "canceled";
 	position: number;
+	projectName: string | null;
 	editedAt: string;
 	updatedAt: string;
 }): Todo {
@@ -265,6 +271,7 @@ function toTodo(todo: {
 		tags: todo.tags,
 		status: todo.status,
 		position: todo.position,
+		projectName: todo.projectName,
 		editedAt: todo.editedAt,
 		updatedAt: todo.updatedAt,
 	};

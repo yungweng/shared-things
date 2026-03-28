@@ -12,24 +12,20 @@ const LAUNCH_AGENTS_DIR = path.join(os.homedir(), "Library", "LaunchAgents");
 const PLIST_PATH = path.join(LAUNCH_AGENTS_DIR, PLIST_NAME);
 
 export function installLaunchAgent(): void {
-	// Ensure LaunchAgents directory exists
 	if (!fs.existsSync(LAUNCH_AGENTS_DIR)) {
 		fs.mkdirSync(LAUNCH_AGENTS_DIR, { recursive: true });
 	}
 
-	// Find the installed binary path
 	let binPath: string;
 	try {
 		binPath = execSync("which shared-things", { encoding: "utf-8" }).trim();
 	} catch {
-		// Fallback: assume it's in npm global bin
 		const npmPrefix = execSync("npm prefix -g", { encoding: "utf-8" }).trim();
 		binPath = path.join(npmPrefix, "bin", "shared-things");
 	}
 
 	const logPath = path.join(os.homedir(), ".shared-things", "sync.log");
 
-	// Get the directory containing the current node binary (supports nvm, fnm, etc.)
 	let nodeBinDir: string;
 	try {
 		const nodePath = execSync("which node", { encoding: "utf-8" }).trim();
@@ -38,7 +34,6 @@ export function installLaunchAgent(): void {
 		nodeBinDir = "/usr/local/bin";
 	}
 
-	// Build PATH with node's bin dir first, then standard paths
 	const envPath = [
 		nodeBinDir,
 		"/usr/local/bin",
@@ -46,7 +41,7 @@ export function installLaunchAgent(): void {
 		"/bin",
 		"/opt/homebrew/bin",
 	]
-		.filter((p, i, arr) => arr.indexOf(p) === i) // dedupe
+		.filter((p, i, arr) => arr.indexOf(p) === i)
 		.join(":");
 
 	const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -89,20 +84,23 @@ export function installLaunchAgent(): void {
 	fs.writeFileSync(PLIST_PATH, plist);
 	console.log(`Created: ${PLIST_PATH}`);
 
-	// Load the agent
 	try {
 		execSync(`launchctl unload "${PLIST_PATH}" 2>/dev/null || true`);
 		execSync(`launchctl load "${PLIST_PATH}"`);
 		console.log("LaunchAgent installed and started.");
 	} catch (error) {
 		console.warn(`Warning: Could not load LaunchAgent: ${error}`);
-		console.warn("You may need to manually load it or restart your Mac.");
 	}
 }
 
 export function startLaunchAgent(): void {
 	if (!fs.existsSync(PLIST_PATH)) {
 		installLaunchAgent();
+		return;
+	}
+	const status = getLaunchAgentStatus();
+	if (status === "running") {
+		console.log("LaunchAgent is already running.");
 		return;
 	}
 	try {
@@ -131,13 +129,11 @@ export function uninstallLaunchAgent(): void {
 		console.log("LaunchAgent not installed.");
 		return;
 	}
-
 	try {
 		execSync(`launchctl unload "${PLIST_PATH}"`);
 	} catch {
-		// Ignore if not loaded
+		// Ignore
 	}
-
 	fs.unlinkSync(PLIST_PATH);
 	console.log("LaunchAgent uninstalled.");
 }
@@ -150,10 +146,7 @@ export function getLaunchAgentStatus():
 	| "running"
 	| "stopped"
 	| "not-installed" {
-	if (!isLaunchAgentInstalled()) {
-		return "not-installed";
-	}
-
+	if (!isLaunchAgentInstalled()) return "not-installed";
 	try {
 		const result = execSync(`launchctl list | grep com.shared-things.daemon`, {
 			encoding: "utf-8",

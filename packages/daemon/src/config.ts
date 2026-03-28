@@ -24,10 +24,14 @@ export function loadConfig(): DaemonConfig | null {
 	if (!fs.existsSync(CONFIG_PATH)) {
 		return null;
 	}
-
 	try {
 		const content = fs.readFileSync(CONFIG_PATH, "utf-8");
-		return JSON.parse(content) as DaemonConfig;
+		const config = JSON.parse(content) as DaemonConfig;
+		// Backward compat: old configs without syncMode default to "project"
+		if (!config.syncMode) {
+			config.syncMode = "project";
+		}
+		return config;
 	} catch {
 		return null;
 	}
@@ -35,7 +39,9 @@ export function loadConfig(): DaemonConfig | null {
 
 export function saveConfig(config: DaemonConfig): void {
 	ensureConfigDir();
-	fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+	fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), {
+		mode: 0o600,
+	});
 }
 
 export function configExists(): boolean {

@@ -57,23 +57,14 @@ export class ApiClient {
 		return response.json() as Promise<T>;
 	}
 
-	/**
-	 * Get full project state
-	 */
 	async getState(): Promise<ProjectState> {
 		return this.request<ProjectState>("/state");
 	}
 
-	/**
-	 * Get changes since timestamp
-	 */
 	async getDelta(since: string): Promise<SyncDelta> {
 		return this.request<SyncDelta>(`/delta?since=${encodeURIComponent(since)}`);
 	}
 
-	/**
-	 * Push local changes
-	 */
 	async push(request: PushRequest): Promise<PushResponse> {
 		return this.request<PushResponse>("/push", {
 			method: "POST",
@@ -81,25 +72,14 @@ export class ApiClient {
 		});
 	}
 
-	/**
-	 * Health check
-	 */
 	async health(): Promise<{ status: string; timestamp: string }> {
 		return this.request<{ status: string; timestamp: string }>("/health");
 	}
 
-	/**
-	 * Reset all user data on server
-	 */
 	async reset(): Promise<{
 		success: boolean;
 		deleted: { todos: number };
 	}> {
-		return this.request<{
-			success: boolean;
-			deleted: { todos: number };
-		}>("/reset", {
-			method: "DELETE",
-		});
+		return this.request("/reset", { method: "DELETE" });
 	}
 }

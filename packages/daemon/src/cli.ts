@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * shared-things CLI
+ * shared-things CLI (v3)
  */
 
 import { spawn } from "node:child_process";
@@ -10,7 +10,6 @@ import * as path from "node:path";
 import { confirm, input, password, select } from "@inquirer/prompts";
 import chalk from "chalk";
 import { Command } from "commander";
-import updateNotifier from "update-notifier";
 import { ApiClient } from "./api.js";
 import {
 	configExists,
@@ -18,97 +17,50 @@ import {
 	loadConfig,
 	saveConfig,
 } from "./config.js";
+import { Daemon } from "./daemon.js";
 import {
 	getLaunchAgentStatus,
 	installLaunchAgent,
 	startLaunchAgent,
 	stopLaunchAgent,
-	uninstallLaunchAgent,
 } from "./launchagent.js";
 import { logError, logInfo } from "./logger.js";
+import { readConflicts, writeInitialState } from "./state.js";
 import { runSync } from "./sync.js";
 import {
+	getTodosFromArea,
 	getTodosFromProject,
 	isThingsRunning,
+	listAreas,
 	listProjects,
 } from "./things.js";
 
-// Check for updates with immediate feedback
-const pkg = JSON.parse(
-	fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
-);
-const updateCheckInterval = 1000 * 60 * 60; // 1 hour
-
-// updateNotifier() calls check() which loads cached update into notifier.update
-// and clears the cache (by design - it's a one-time read)
-const notifier = updateNotifier({ pkg, updateCheckInterval });
-
-// Validate cached update against current version (user may have upgraded)
-// Note: We intentionally mutate read-only properties here because update-notifier
-// caches updates and we need to correct stale data when the user has upgraded
-if (notifier.update) {
-	(notifier.update as { current: string }).current = pkg.version;
-	// Clear if no longer outdated
-	if (notifier.update.current === notifier.update.latest) {
-		(notifier as { update: undefined }).update = undefined;
-	}
+/** Get the sync target name from config */
+function getSyncTarget(config: {
+	syncMode?: string;
+	projectName?: string;
+	areaName?: string;
+}): string {
+	if (config.syncMode === "area" && config.areaName) return config.areaName;
+	return config.projectName || "Unknown";
 }
-
-// Detect first run: lastUpdateCheck was just set by constructor (within last second)
-const lastCheck = notifier.config?.get("lastUpdateCheck") ?? 0;
-const isFirstRun = Date.now() - lastCheck < 1000;
-const intervalPassed = Date.now() - lastCheck >= updateCheckInterval;
-
-// Fetch immediately if no cached update and (first run OR interval passed)
-// This fixes the 24h delay issue where check() skips spawning on first run
-if (!notifier.update && (isFirstRun || intervalPassed)) {
-	try {
-		const update = await notifier.fetchInfo();
-		notifier.config?.set("lastUpdateCheck", Date.now());
-		if (update && update.type !== "latest") {
-			(notifier as { update: typeof update }).update = update;
-		}
-	} catch {
-		// Ignore network errors
-	}
-}
-
-// Re-cache update for next run (check() deleted it when reading)
-// Only cache if there's actually an update available
-if (notifier.update && notifier.update.current !== notifier.update.latest) {
-	notifier.config?.set("update", notifier.update);
-} else {
-	notifier.config?.delete("update");
-}
-
-// Show notification on exit (bypasses TTY check that blocks notify())
-process.on("exit", () => {
-	if (notifier.update && notifier.update.current !== notifier.update.latest) {
-		console.error(
-			chalk.yellow(
-				`\n  Update available: ${notifier.update.current} → ${notifier.update.latest}`,
-			) + chalk.dim(`\n  Run: npm i -g ${pkg.name}\n`),
-		);
-	}
-});
 
 const program = new Command();
 
 program
 	.name("shared-things")
-	.description("Sync a Things 3 project between multiple users")
-	.version(pkg.version);
+	.description("Sync a Things 3 project between multiple users (v3)")
+	.version("3.0.0");
 
 // =============================================================================
-// init command
+// init
 // =============================================================================
 program
 	.command("init")
 	.description("Setup wizard")
 	.action(async () => {
-		console.log("\n🔄 shared-things Setup\n");
+		console.log(chalk.bold("\nshared-things Setup\n"));
 
-		// Check if already configured
 		if (configExists()) {
 			const overwrite = await confirm({
 				message: "Configuration already exists. Overwrite?",
@@ -118,7 +70,6 @@ program
 				console.log(chalk.dim("Cancelled."));
 				return;
 			}
-			// Delete old state to start fresh
 			const statePath = path.join(getConfigDir(), "state.json");
 			if (fs.existsSync(statePath)) {
 				fs.unlinkSync(statePath);
@@ -126,9 +77,10 @@ program
 			}
 		}
 
-		// Check Things
 		if (!isThingsRunning()) {
-			console.log("⚠️  Things 3 is not running. Please start it first.\n");
+			console.log(
+				chalk.yellow("Things 3 is not running. Please start it first.\n"),
+			);
 		}
 
 		// Step 1: Server URL
@@ -151,55 +103,90 @@ program
 			validate: (value) => (value ? true : "API key is required"),
 		});
 
-		// Verify connection and API key
-		console.log("\n⏳ Verifying connection...");
+		// Verify connection
+		console.log(chalk.dim("\nVerifying connection..."));
 		const api = new ApiClient(serverUrl, apiKey);
 		try {
 			await api.health();
-			console.log("✅ Server reachable");
+			console.log(chalk.green("Server reachable"));
 		} catch (error) {
-			console.error(`❌ Failed to connect to server: ${error}`);
+			console.error(chalk.red(`Failed to connect: ${error}`));
 			process.exit(1);
 		}
 
-		// Verify API key by calling an authenticated endpoint
-		console.log("⏳ Verifying API key...");
 		try {
 			await api.getState();
-			console.log("✅ API key valid!\n");
+			console.log(chalk.green("API key valid\n"));
 		} catch (error) {
-			console.error(`❌ Invalid API key: ${error}`);
+			console.error(chalk.red(`Invalid API key: ${error}`));
 			process.exit(1);
 		}
 
-		// Step 3: Select Things project
-		const projects = listProjects();
-		if (projects.length === 0) {
-			console.error(
-				"❌ No Things projects found. Create a project in Things first.",
-			);
-			process.exit(1);
-		}
-
-		const projectName = await select({
-			message: "Things project to sync",
-			choices: projects.map((p) => ({ name: p, value: p })),
+		// Step 3: Select sync mode and target
+		const syncMode = await select({
+			message: "What do you want to sync?",
+			choices: [
+				{ name: "A single project", value: "project" as const },
+				{
+					name: "An entire area (all projects within it)",
+					value: "area" as const,
+				},
+			],
 		});
 
-		// Verify project access
-		console.log("\n⏳ Checking Things project...");
-		const todos = getTodosFromProject(projectName);
-		if (todos.length > 0) {
-			console.error(
-				`❌ Project "${projectName}" must be empty for first sync (found ${todos.length}).`,
+		let projectName: string | undefined;
+		let areaName: string | undefined;
+
+		if (syncMode === "area") {
+			const areas = listAreas();
+			if (areas.length === 0) {
+				console.error(
+					chalk.red("No Things areas found. Create an area in Things first."),
+				);
+				process.exit(1);
+			}
+			areaName = await select({
+				message: "Things area to sync",
+				choices: areas.map((a) => ({ name: a, value: a })),
+			});
+			console.log(
+				chalk.green(
+					`\nArea "${areaName}" selected. All projects within it will sync.\n`,
+				),
 			);
-			process.exit(1);
+		} else {
+			const projects = listProjects();
+			if (projects.length === 0) {
+				console.error(
+					chalk.red(
+						"No Things projects found. Create a project in Things first.",
+					),
+				);
+				process.exit(1);
+			}
+			projectName = await select({
+				message: "Things project to sync",
+				choices: projects.map((p) => ({ name: p, value: p })),
+			});
+
+			console.log(chalk.dim("\nChecking Things project..."));
+			const todos = getTodosFromProject(projectName);
+			if (todos.length > 0) {
+				console.error(
+					chalk.red(
+						`Project "${projectName}" must be empty for first sync (found ${todos.length} todos).`,
+					),
+				);
+				process.exit(1);
+			}
+			console.log(chalk.green(`Project "${projectName}" is empty.\n`));
 		}
-		console.log(`✅ Project "${projectName}" is empty.\n`);
 
 		// Step 4: Things Auth Token
-		console.log("📋 Find your Things Auth Token in:");
-		console.log("   Things → Settings → General → Things URLs → Manage\n");
+		console.log("Find your Things Auth Token in:");
+		console.log(
+			chalk.dim("  Things > Settings > General > Things URLs > Manage\n"),
+		);
 
 		const thingsAuthToken = await password({
 			message: "Things Auth Token",
@@ -208,28 +195,19 @@ program
 				value ? true : "Auth token is required for updating tasks",
 		});
 
-		console.log(
-			chalk.yellow("\n⚠️  Auth token will be verified on first sync.\n"),
-		);
-
 		// Save config
 		saveConfig({
 			serverUrl,
 			apiKey,
+			syncMode,
 			projectName,
-			pollInterval: 30,
+			areaName,
 			thingsAuthToken,
+			fallbackPollIntervalSeconds: 60,
 		});
 
-		// Initialize state.json
-		writeState({
-			lastSyncedAt: new Date().toISOString(),
-			todos: {},
-			serverIdToThingsId: {},
-			dirty: { upserted: [], deleted: {} },
-		});
-
-		console.log("\n✅ Configuration saved!\n");
+		writeInitialState();
+		console.log(chalk.green("\nConfiguration saved!\n"));
 
 		const install = await confirm({
 			message: "Install LaunchAgent to run sync automatically on login?",
@@ -241,11 +219,11 @@ program
 
 		console.log("\nNext steps:");
 		console.log('  1. Run "shared-things sync" for a one-time sync');
-		console.log('  2. Or run "shared-things start" to run the daemon\n');
+		console.log('  2. Or run "shared-things start" to start the daemon\n');
 	});
 
 // =============================================================================
-// install command
+// start / stop
 // =============================================================================
 program
 	.command("start")
@@ -258,9 +236,6 @@ program
 		startLaunchAgent();
 	});
 
-// =============================================================================
-// uninstall command
-// =============================================================================
 program
 	.command("stop")
 	.description("Stop the sync daemon (launchd)")
@@ -268,100 +243,129 @@ program
 		stopLaunchAgent();
 	});
 
-// Backwards compatible commands
+// =============================================================================
+// target (switch sync mode)
+// =============================================================================
 program
-	.command("install")
-	.description("Install launchd daemon (deprecated)")
-	.action(() => {
+	.command("target")
+	.description("Change sync target (project or area)")
+	.action(async () => {
 		if (!configExists()) {
 			console.error('Not configured. Run "shared-things init" first.');
 			process.exit(1);
 		}
-		installLaunchAgent();
-	});
 
-program
-	.command("uninstall")
-	.description("Remove launchd daemon (deprecated)")
-	.action(() => {
-		uninstallLaunchAgent();
+		const config = loadConfig()!;
+		console.log(
+			chalk.dim(
+				`\nCurrent: ${getSyncTarget(config)} (${config.syncMode || "project"})\n`,
+			),
+		);
+
+		const syncMode = await select({
+			message: "What do you want to sync?",
+			choices: [
+				{ name: "A single project", value: "project" as const },
+				{
+					name: "An entire area (all projects within it)",
+					value: "area" as const,
+				},
+			],
+		});
+
+		if (syncMode === "area") {
+			const areas = listAreas();
+			if (areas.length === 0) {
+				console.error(chalk.red("No Things areas found."));
+				return;
+			}
+			config.syncMode = "area";
+			config.areaName = await select({
+				message: "Things area to sync",
+				choices: areas.map((a) => ({ name: a, value: a })),
+			});
+		} else {
+			const projects = listProjects();
+			if (projects.length === 0) {
+				console.error(chalk.red("No Things projects found."));
+				return;
+			}
+			config.syncMode = "project";
+			config.projectName = await select({
+				message: "Things project to sync",
+				choices: projects.map((p) => ({ name: p, value: p })),
+			});
+		}
+
+		saveConfig(config);
+		writeInitialState();
+		console.log(
+			chalk.green(
+				`\nTarget changed to: ${getSyncTarget(config)} (${config.syncMode})`,
+			),
+		);
+		console.log(chalk.dim('Run "shared-things sync" or restart the daemon.\n'));
 	});
 
 // =============================================================================
-// status command
+// status
 // =============================================================================
 program
 	.command("status")
 	.description("Show sync status")
 	.action(async () => {
 		if (!configExists()) {
-			console.log(chalk.yellow("⚠️  Not configured"));
+			console.log(chalk.yellow("Not configured."));
 			console.log(chalk.dim('Run "shared-things init" to get started.'));
 			return;
 		}
 
 		const config = loadConfig()!;
 		const daemonStatus = getLaunchAgentStatus();
-		const isRunning = daemonStatus === "running";
 
-		console.log(chalk.bold("\n📊 shared-things Status\n"));
+		console.log(chalk.bold("\nshared-things Status\n"));
 
-		// Check server connectivity
 		const api = new ApiClient(config.serverUrl, config.apiKey);
 		let serverReachable = false;
 		try {
 			await api.health();
 			serverReachable = true;
-		} catch {
-			serverReachable = false;
-		}
+		} catch {}
 
 		console.log(
-			`${chalk.dim("Server:")}    ${chalk.cyan(config.serverUrl)} ${serverReachable ? chalk.green("●") : chalk.red("○")}`,
+			`  ${chalk.dim("Server:")}    ${config.serverUrl} ${serverReachable ? chalk.green("connected") : chalk.red("unreachable")}`,
 		);
 		console.log(
-			`${chalk.dim("Project:")}   ${chalk.white(config.projectName)}`,
+			`  ${chalk.dim("Target:")}    ${getSyncTarget(config)} (${config.syncMode || "project"})`,
 		);
-		console.log(`${chalk.dim("Interval:")}  ${config.pollInterval}s`);
 		console.log(
-			`${chalk.dim("Daemon:")}    ${isRunning ? chalk.green("● running") : chalk.red("○ stopped")}`,
+			`  ${chalk.dim("Mode:")}      event-driven (file watcher + WebSocket)`,
+		);
+		console.log(
+			`  ${chalk.dim("Daemon:")}    ${daemonStatus === "running" ? chalk.green("running") : chalk.red(daemonStatus)}`,
 		);
 
-		const state = readState();
-		if (state) {
-			const lastSync = new Date(state.lastSyncedAt);
-			const ago = formatTimeAgo(lastSync);
-			console.log(`${chalk.dim("Last sync:")} ${ago}`);
-			console.log(
-				`${chalk.dim("Dirty:")}    upserted=${state.dirty.upserted.length}, deleted=${Object.keys(state.dirty.deleted).length}`,
-			);
-		} else {
-			console.log(`${chalk.dim("Last sync:")} ${chalk.yellow("never")}`);
+		const statePath = path.join(getConfigDir(), "state.json");
+		if (fs.existsSync(statePath)) {
+			try {
+				const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+				const lastSync = new Date(state.lastSyncedAt);
+				const ago = formatTimeAgo(lastSync);
+				console.log(`  ${chalk.dim("Last sync:")} ${ago}`);
+			} catch {}
 		}
 
 		const conflicts = readConflicts();
 		if (conflicts.length > 0) {
 			console.log(
-				`${chalk.dim("Conflicts:")} ${chalk.yellow(conflicts.length)} (run "shared-things conflicts")`,
+				`  ${chalk.dim("Conflicts:")} ${chalk.yellow(String(conflicts.length))}`,
 			);
 		}
 		console.log();
 	});
 
-// Helper to format relative time
-function formatTimeAgo(date: Date): string {
-	const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-	if (seconds < 60) return "just now";
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.floor(hours / 24);
-	return `${days}d ago`;
-}
-
 // =============================================================================
-// sync command
+// sync
 // =============================================================================
 program
 	.command("sync")
@@ -375,25 +379,24 @@ program
 		try {
 			const result = await runSync();
 			if (result.skipped) {
-				console.log(chalk.yellow("⚠️  Sync skipped (another sync is running)."));
+				console.log(chalk.yellow("Sync skipped (another sync is running)."));
 				return;
 			}
-			if (result.isFirstSync)
-				console.log(chalk.cyan("📥 First sync completed!"));
+			if (result.isFirstSync) console.log(chalk.cyan("First sync completed!"));
 			console.log(
 				chalk.green(
-					`✅ Done! Pushed: ${result.pushed}, Pulled: ${result.pulled}, Conflicts: ${result.conflicts}`,
+					`Done! Pushed: ${result.pushed}, Pulled: ${result.pulled}, Conflicts: ${result.conflicts}`,
 				),
 			);
 		} catch (error) {
 			logError("Manual sync failed", error);
-			console.error(chalk.red(`❌ Sync failed: ${error}`));
+			console.error(chalk.red(`Sync failed: ${error}`));
 			process.exit(1);
 		}
 	});
 
 // =============================================================================
-// daemon command (internal, run by launchd)
+// daemon (internal, run by launchd)
 // =============================================================================
 program
 	.command("daemon")
@@ -405,38 +408,15 @@ program
 		}
 
 		const config = loadConfig()!;
-		logInfo("Daemon started");
-		logInfo(`Polling interval: ${config.pollInterval}s`);
-		console.log(`Daemon started. Syncing every ${config.pollInterval}s...`);
+		const daemon = new Daemon(config);
+		await daemon.start();
 
-		// Handle graceful shutdown
-		const shutdown = () => {
-			logInfo("Daemon stopped");
-			process.exit(0);
-		};
-		process.on("SIGTERM", shutdown);
-		process.on("SIGINT", shutdown);
-
-		// Initial sync
-		try {
-			await runSync();
-			logInfo("Initial sync complete");
-		} catch (error) {
-			logError("Initial sync failed", error);
-		}
-
-		// Poll loop
-		setInterval(async () => {
-			try {
-				await runSync();
-			} catch (error) {
-				logError("Sync failed", error);
-			}
-		}, config.pollInterval * 1000);
+		// Keep process alive
+		await new Promise(() => {});
 	});
 
 // =============================================================================
-// logs command
+// logs
 // =============================================================================
 program
 	.command("logs")
@@ -444,7 +424,6 @@ program
 	.option("-f, --follow", "Follow log output")
 	.action((options) => {
 		const logPath = path.join(getConfigDir(), "sync.log");
-
 		if (!fs.existsSync(logPath)) {
 			console.log("No logs yet.");
 			return;
@@ -459,12 +438,12 @@ program
 	});
 
 // =============================================================================
-// reset command
+// reset
 // =============================================================================
 program
 	.command("reset")
 	.description("Reset sync state")
-	.option("--local", "Clear local state (re-sync from server)")
+	.option("--local", "Clear local state")
 	.option("--server", "Clear server data for this user")
 	.action(async (options) => {
 		if (!configExists()) {
@@ -478,76 +457,66 @@ program
 		}
 
 		const config = loadConfig()!;
-		const statePath = path.join(getConfigDir(), "state.json");
-		const hasLocalState = fs.existsSync(statePath);
 
 		if (options.local) {
 			try {
-				const todos = getTodosFromProject(config.projectName);
+				const target = getSyncTarget(config);
+				const todos =
+					config.syncMode === "area" && config.areaName
+						? getTodosFromArea(config.areaName)
+						: getTodosFromProject(config.projectName!);
 				if (todos.length > 0) {
 					console.error(
-						`❌ Project "${config.projectName}" must be empty to reset local state.`,
+						chalk.red(`"${target}" must be empty to reset local state.`),
 					);
 					return;
 				}
 			} catch (error) {
-				console.error(`❌ Failed to read Things project: ${error}`);
+				console.error(chalk.red(`Failed to read Things project: ${error}`));
 				return;
 			}
 		}
 
 		const confirmed = await confirm({
-			message: "This action cannot be undone. Continue?",
+			message: "This cannot be undone. Continue?",
 			default: false,
 		});
-
 		if (!confirmed) {
 			console.log(chalk.dim("Cancelled."));
 			return;
 		}
 
-		// Reset server data if requested
 		if (options.server) {
 			const api = new ApiClient(config.serverUrl, config.apiKey);
-
 			try {
-				console.log(chalk.dim("Deleting server data..."));
 				const result = await api.reset();
 				logInfo(`Server reset: deleted ${result.deleted.todos} todos`);
 				console.log(
-					chalk.green(`✅ Server data deleted (${result.deleted.todos} todos)`),
+					chalk.green(`Server data deleted (${result.deleted.todos} todos)`),
 				);
 			} catch (error) {
 				logError("Server reset failed", error);
-				console.error(chalk.red(`❌ Failed to reset server: ${error}`));
+				console.error(chalk.red(`Failed: ${error}`));
 				return;
 			}
 		}
 
 		if (options.local) {
-			if (hasLocalState) {
-				fs.unlinkSync(statePath);
-			}
+			const statePath = path.join(getConfigDir(), "state.json");
+			if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
 			const conflictsPath = path.join(getConfigDir(), "conflicts.json");
 			if (fs.existsSync(conflictsPath)) fs.unlinkSync(conflictsPath);
-			writeState({
-				lastSyncedAt: new Date(0).toISOString(),
-				todos: {},
-				serverIdToThingsId: {},
-				dirty: { upserted: [], deleted: {} },
-			});
-			logInfo("Local sync state reset by user");
+			writeInitialState();
+			logInfo("Local state reset");
 		}
 
 		console.log(
-			chalk.green(
-				'✅ Reset complete. Run "shared-things sync" for a fresh sync.',
-			),
+			chalk.green('Reset complete. Run "shared-things sync" for a fresh sync.'),
 		);
 	});
 
 // =============================================================================
-// conflicts command
+// conflicts
 // =============================================================================
 program
 	.command("conflicts")
@@ -561,23 +530,20 @@ program
 		}
 
 		const shown = options.all ? conflicts : conflicts.slice(-10);
-		console.log(chalk.bold(`\n⚠️  Conflicts (${shown.length})\n`));
-		for (const conflict of shown) {
+		console.log(chalk.bold(`\nConflicts (${shown.length})\n`));
+		for (const c of shown) {
 			console.log(
-				`${chalk.dim(conflict.timestamp)} ${chalk.white(conflict.title)} (${conflict.serverId})`,
+				`${chalk.dim(c.timestamp)} ${chalk.white(c.title)} (${c.serverId})`,
 			);
-			console.log(`  ${chalk.dim("Reason:")} ${conflict.reason}`);
-			if (conflict.yourVersion.editedAt || conflict.yourVersion.deletedAt) {
+			console.log(`  ${chalk.dim("Reason:")} ${c.reason}`);
+			if (c.yourVersion.editedAt || c.yourVersion.deletedAt) {
 				console.log(
-					`  ${chalk.dim("Yours:")} ${formatConflictVersion(conflict.yourVersion)}`,
+					`  ${chalk.dim("Yours:")} ${c.yourVersion.deletedAt ? `deleted at ${c.yourVersion.deletedAt}` : `edited at ${c.yourVersion.editedAt}`}`,
 				);
 			}
-			if (
-				conflict.winningVersion.editedAt ||
-				conflict.winningVersion.deletedAt
-			) {
+			if (c.winningVersion.editedAt || c.winningVersion.deletedAt) {
 				console.log(
-					`  ${chalk.dim("Winner:")} ${formatConflictVersion(conflict.winningVersion)}`,
+					`  ${chalk.dim("Winner:")} ${c.winningVersion.deletedAt ? `deleted at ${c.winningVersion.deletedAt}` : `edited at ${c.winningVersion.editedAt}`}`,
 				);
 			}
 			console.log();
@@ -585,139 +551,186 @@ program
 	});
 
 // =============================================================================
-// repair command
-// =============================================================================
-program
-	.command("repair")
-	.description("Diagnose state issues (no auto-fix)")
-	.action(() => {
-		const issues: string[] = [];
-		if (!configExists()) {
-			issues.push("Missing config.json (run init)");
-		}
-		const state = readState();
-		if (!state) {
-			issues.push("Missing or invalid state.json");
-		}
-		if (issues.length === 0) {
-			console.log(chalk.green("No issues detected."));
-		} else {
-			console.log(chalk.yellow("Issues detected:"));
-			for (const issue of issues) {
-				console.log(`- ${issue}`);
-			}
-		}
-	});
-
-// =============================================================================
-// doctor command
+// doctor
 // =============================================================================
 program
 	.command("doctor")
 	.description("Comprehensive health check")
 	.action(async () => {
-		console.log(chalk.bold("\n🩺 shared-things Doctor\n"));
+		console.log(chalk.bold("\nshared-things Doctor\n"));
 
 		if (!configExists()) {
-			console.log(chalk.red("Config: missing (run init)"));
+			console.log(chalk.red("  Config: missing (run init)"));
 			return;
 		}
 
 		const config = loadConfig()!;
-		console.log(chalk.green("Config: ok"));
+		console.log(chalk.green("  Config: ok"));
 
-		const state = readState();
+		const statePath = path.join(getConfigDir(), "state.json");
 		console.log(
-			state ? chalk.green("State: ok") : chalk.red("State: missing/invalid"),
+			fs.existsSync(statePath)
+				? chalk.green("  State: ok")
+				: chalk.red("  State: missing"),
 		);
 
-		if (!isThingsRunning()) {
-			console.log(chalk.yellow("Things 3: not running"));
-		} else {
-			console.log(chalk.green("Things 3: running"));
-		}
+		console.log(
+			isThingsRunning()
+				? chalk.green("  Things 3: running")
+				: chalk.yellow("  Things 3: not running"),
+		);
 
-		const projects = listProjects();
-		if (!projects.includes(config.projectName)) {
-			console.log(chalk.red(`Project: "${config.projectName}" not found`));
+		const target = getSyncTarget(config);
+		if (config.syncMode === "area") {
+			const areas = listAreas();
+			console.log(
+				areas.includes(target)
+					? chalk.green(`  Area: ${target}`)
+					: chalk.red(`  Area: "${target}" not found`),
+			);
 		} else {
-			console.log(chalk.green(`Project: ${config.projectName}`));
+			const projects = listProjects();
+			console.log(
+				projects.includes(target)
+					? chalk.green(`  Project: ${target}`)
+					: chalk.red(`  Project: "${target}" not found`),
+			);
 		}
 
 		const api = new ApiClient(config.serverUrl, config.apiKey);
 		try {
 			await api.health();
-			console.log(chalk.green("Server: reachable"));
+			console.log(chalk.green("  Server: reachable"));
 		} catch {
-			console.log(chalk.red("Server: unreachable"));
+			console.log(chalk.red("  Server: unreachable"));
 		}
 
-		const daemonStatus = getLaunchAgentStatus();
-		console.log(chalk.green(`Daemon: ${daemonStatus}`));
+		console.log(chalk.green(`  Daemon: ${getLaunchAgentStatus()}`));
 		console.log();
 	});
 
-function readState(): {
-	lastSyncedAt: string;
-	dirty: { upserted: string[]; deleted: Record<string, string> };
-} | null {
-	const statePath = path.join(getConfigDir(), "state.json");
-	if (!fs.existsSync(statePath)) return null;
-	try {
-		const raw = fs.readFileSync(statePath, "utf-8");
-		const data = JSON.parse(raw) as {
-			lastSyncedAt: string;
-			dirty?: { upserted?: string[]; deleted?: Record<string, string> };
-		};
-		return {
-			lastSyncedAt: data.lastSyncedAt,
-			dirty: {
-				upserted: data.dirty?.upserted ?? [],
-				deleted: data.dirty?.deleted ?? {},
-			},
-		};
-	} catch {
-		return null;
-	}
-}
+// =============================================================================
+// update
+// =============================================================================
+program
+	.command("update")
+	.description("Pull latest changes, rebuild, and restart daemon")
+	.option("--reset", "Also reset state (keeps config, re-syncs from server)")
+	.action(async (options) => {
+		const { execSync: exec } = await import("node:child_process");
 
-function readConflicts(): Array<{
-	timestamp: string;
-	serverId: string;
-	title: string;
-	yourVersion: { editedAt?: string; deletedAt?: string };
-	winningVersion: { editedAt?: string; deletedAt?: string };
-	reason: string;
-}> {
-	const conflictsPath = path.join(getConfigDir(), "conflicts.json");
-	if (!fs.existsSync(conflictsPath)) return [];
-	try {
-		return JSON.parse(fs.readFileSync(conflictsPath, "utf-8"));
-	} catch {
-		return [];
-	}
-}
+		// Find repo root from the CLI script location
+		// dist/cli.js -> packages/daemon/dist/cli.js -> ../../.. = repo root
+		const cliPath = new URL(import.meta.url).pathname;
+		let repoRoot = path.dirname(cliPath);
+		// Walk up until we find pnpm-workspace.yaml
+		for (let i = 0; i < 5; i++) {
+			if (fs.existsSync(path.join(repoRoot, "pnpm-workspace.yaml"))) break;
+			repoRoot = path.dirname(repoRoot);
+		}
+		if (!fs.existsSync(path.join(repoRoot, "pnpm-workspace.yaml"))) {
+			console.error(
+				chalk.red("Could not find repo root. Are you running from the repo?"),
+			);
+			process.exit(1);
+		}
 
-function formatConflictVersion(version: {
-	title?: string;
-	editedAt?: string;
-	deletedAt?: string;
-}): string {
-	if (version.deletedAt) return `deletedAt=${version.deletedAt}`;
-	if (version.editedAt) return `editedAt=${version.editedAt}`;
-	return "unknown";
-}
+		// 1. Stop daemon
+		const wasRunning = getLaunchAgentStatus() === "running";
+		if (wasRunning) {
+			console.log(chalk.dim("Stopping daemon..."));
+			try {
+				stopLaunchAgent();
+			} catch {}
+		}
 
-function writeState(state: {
-	lastSyncedAt: string;
-	todos: Record<string, unknown>;
-	serverIdToThingsId: Record<string, string>;
-	dirty: { upserted: string[]; deleted: Record<string, string> };
-}) {
-	const statePath = path.join(getConfigDir(), "state.json");
-	const temp = `${statePath}.tmp-${process.pid}`;
-	fs.writeFileSync(temp, JSON.stringify(state, null, 2));
-	fs.renameSync(temp, statePath);
+		// 2. Git pull
+		console.log(chalk.dim("Pulling latest changes..."));
+		try {
+			const pullOutput = exec("git pull", {
+				cwd: repoRoot,
+				encoding: "utf-8",
+			}).trim();
+			if (pullOutput.includes("Already up to date")) {
+				console.log(`  ${chalk.green("Already up to date")}`);
+			} else {
+				console.log(`  ${chalk.green("Updated")}`);
+			}
+		} catch (error) {
+			console.error(chalk.red(`Git pull failed: ${error}`));
+			process.exit(1);
+		}
+
+		// 3. Build
+		console.log(chalk.dim("Building..."));
+		try {
+			exec("pnpm install --frozen-lockfile 2>/dev/null || pnpm install", {
+				cwd: repoRoot,
+				stdio: "pipe",
+			});
+			exec("pnpm build", { cwd: repoRoot, stdio: "pipe" });
+			console.log(`  ${chalk.green("Build complete")}`);
+		} catch (error) {
+			console.error(chalk.red(`Build failed: ${error}`));
+			process.exit(1);
+		}
+
+		// 4. Reset state if requested (keeps config)
+		if (options.reset) {
+			console.log(chalk.dim("Resetting state..."));
+			const configDir = getConfigDir();
+			for (const file of ["state.json", "conflicts.json", "sync.log"]) {
+				const p = path.join(configDir, file);
+				if (fs.existsSync(p)) fs.unlinkSync(p);
+			}
+			writeInitialState();
+			console.log(`  ${chalk.green("State reset (config preserved)")}`);
+		}
+
+		// 5. Check if config needs new fields
+		if (configExists()) {
+			const config = loadConfig()!;
+			let configChanged = false;
+
+			if (!config.syncMode) {
+				config.syncMode = "project";
+				configChanged = true;
+			}
+			if (
+				config.fallbackPollIntervalSeconds === undefined ||
+				config.fallbackPollIntervalSeconds === null
+			) {
+				config.fallbackPollIntervalSeconds = 60;
+				configChanged = true;
+			}
+
+			if (configChanged) {
+				saveConfig(config);
+				console.log(`  ${chalk.yellow("Config migrated with new defaults")}`);
+			}
+		}
+
+		// 6. Restart daemon
+		if (wasRunning || options.reset) {
+			console.log(chalk.dim("Starting daemon..."));
+			installLaunchAgent();
+		}
+
+		console.log(chalk.green("\nUpdate complete!\n"));
+	});
+
+// =============================================================================
+// helpers
+// =============================================================================
+function formatTimeAgo(date: Date): string {
+	const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+	if (seconds < 60) return "just now";
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	return `${days}d ago`;
 }
 
 program.parse();

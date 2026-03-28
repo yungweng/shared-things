@@ -1,5 +1,5 @@
 /**
- * Shared types for shared-things
+ * Shared types for shared-things v3
  */
 
 // =============================================================================
@@ -9,18 +9,15 @@
 export interface Todo {
 	/** Server-assigned unique ID */
 	id: string;
-	/** Todo title */
 	title: string;
-	/** Notes/description */
 	notes: string;
-	/** Due date (ISO 8601) */
 	dueDate: string | null;
-	/** Tags (comma-separated in Things) */
 	tags: string[];
-	/** Status */
 	status: "open" | "completed" | "canceled";
 	/** Position within project for ordering */
 	position: number;
+	/** Project name within area (null = loose todo in area root) */
+	projectName: string | null;
 	/** Client edit timestamp (ISO 8601) */
 	editedAt: string;
 	/** Server update timestamp (ISO 8601) */
@@ -28,13 +25,9 @@ export interface Todo {
 }
 
 export interface User {
-	/** Unique user ID */
 	id: string;
-	/** Display name */
 	name: string;
-	/** API key (hashed in DB) */
 	apiKey?: string;
-	/** Creation timestamp */
 	createdAt: string;
 }
 
@@ -45,26 +38,23 @@ export interface User {
 /** Full project state for initial sync */
 export interface ProjectState {
 	todos: Todo[];
-	/** Server timestamp for this state */
 	syncedAt: string;
 }
 
 /** Changes since last sync */
 export interface SyncDelta {
-	/** Todos that were added or modified */
 	todos: {
 		upserted: Todo[];
 		deleted: { serverId: string; deletedAt: string }[];
 	};
-	/** Server timestamp for this delta */
 	syncedAt: string;
 }
 
-/** Todo data for push request - includes optional serverId for updates */
+/** Todo data sent from client to server */
 export interface PushTodo {
 	/** Server ID (include for updates, omit for new items) */
 	serverId?: string;
-	/** Client-local ID for mapping (not stored on server) */
+	/** Client-local ID for mapping back (not stored on server) */
 	clientId?: string;
 	title: string;
 	notes: string;
@@ -72,7 +62,8 @@ export interface PushTodo {
 	tags: string[];
 	status: "open" | "completed" | "canceled";
 	position: number;
-	/** Client edit timestamp */
+	/** Project name within area (null = loose todo in area root) */
+	projectName: string | null;
 	editedAt: string;
 }
 
@@ -82,17 +73,13 @@ export interface PushRequest {
 		upserted: PushTodo[];
 		deleted: { serverId: string; deletedAt: string }[];
 	};
-	/** Client's last known sync timestamp */
 	lastSyncedAt: string;
 }
 
 /** Response from push */
 export interface PushResponse {
-	/** Server's current state after applying changes */
 	state: ProjectState;
-	/** Conflicts that occurred (for logging/debugging) */
 	conflicts: Conflict[];
-	/** Server ID mappings for newly created todos */
 	mappings?: { serverId: string; clientId: string }[];
 }
 
@@ -109,16 +96,17 @@ export interface Conflict {
 // =============================================================================
 
 export interface DaemonConfig {
-	/** Server URL (e.g., https://things.example.com) */
 	serverUrl: string;
-	/** User's API key */
 	apiKey: string;
-	/** Things project name to sync */
-	projectName: string;
-	/** Polling interval in seconds */
-	pollInterval: number;
-	/** Things URL Scheme auth token (from Things → Settings → General → Things URLs) */
+	/** Sync mode: single project or entire area */
+	syncMode: "project" | "area";
+	/** Project name (used when syncMode = "project") */
+	projectName?: string;
+	/** Area name (used when syncMode = "area") */
+	areaName?: string;
 	thingsAuthToken: string;
+	/** Fallback poll interval if file watcher fails (seconds, default: 60) */
+	fallbackPollIntervalSeconds: number;
 }
 
 // =============================================================================

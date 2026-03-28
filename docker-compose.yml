@@ -1,0 +1,13 @@
+services:
+  shared-things:
+    build: .
+    ports:
+      - "3334:3334"
+    volumes:
+      - shared-things-data:/data
+    restart: unless-stopped
+    environment:
+      - DATA_DIR=/data
+
+volumes:
+  shared-things-data:
