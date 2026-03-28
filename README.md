@@ -1,140 +1,188 @@
-<p align="center">
-  <a href="https://www.npmjs.com/package/shared-things-daemon"><img src="https://img.shields.io/npm/v/shared-things-daemon.svg" alt="npm version"></a>
-  <a href="https://github.com/yungweng/shared-things/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/shared-things-daemon.svg" alt="license"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/node/v/shared-things-daemon.svg" alt="node version"></a>
-</p>
-
 # shared-things
 
-**Sync a Things 3 project between multiple macOS users**
+**Sync a Things 3 project between multiple macOS users — in real time.**
 
-Stop duplicating todos manually. shared-things keeps your team's Things 3 project in sync via a lightweight self-hosted server—perfect for shared shopping lists, family tasks, or team todos.
+Stop duplicating todos manually. shared-things keeps your team's Things 3 project in sync via a lightweight self-hosted server. Changes arrive within seconds, not minutes.
 
-<!--
-TODO: Add demo GIF showing sync in action
-<p align="center">
-  <img src="assets/demo.gif" alt="shared-things demo" width="600">
-</p>
--->
+## Architecture
 
-## Quick Start
+```mermaid
+graph LR
+    subgraph "Mac A"
+        T1[Things 3] -->|AppleScript read| D1[Daemon]
+        D1 -->|AppleScript write| T1
+        WAL1[SQLite WAL] -.->|fs.watch| D1
+    end
 
-**Client (each user)**
-```bash
-npm install -g shared-things-daemon
-shared-things init
+    subgraph Server
+        API[REST API]
+        WS[WebSocket]
+        DB[(SQLite)]
+        API --> DB
+        WS --> DB
+    end
+
+    subgraph "Mac B"
+        T2[Things 3] -->|AppleScript read| D2[Daemon]
+        D2 -->|AppleScript write| T2
+        WAL2[SQLite WAL] -.->|fs.watch| D2
+    end
+
+    D1 -->|HTTP POST /push| API
+    API -->|WebSocket delta| D2
+    D2 -->|HTTP POST /push| API
+    API -->|WebSocket delta| D1
 ```
-That's it. Follow the prompts.
 
-> **Note:** The Things project must be empty when you run `init`.
+**How it works:**
 
-## Features
+1. You create/edit/delete a todo in Things
+2. The daemon detects the change instantly via file watcher (Things SQLite WAL)
+3. Pushes the change to the server via REST
+4. Server notifies your colleague's daemon via WebSocket
+5. Their daemon creates/updates/deletes the todo in their Things via AppleScript
 
-- 🔄 **Real-time sync** - Changes propagate within 30 seconds
-- 🏠 **Self-hosted** - No cloud subscription, host on your own server
-- 👥 **Multi-user** - Each person gets their own API key
-- 🤫 **Background daemon** - Auto-starts on login, runs silently
-- 🛠️ **Interactive CLI** - Easy setup wizard for configuration
+No polling. Changes propagate in ~1 second.
 
 ## Prerequisites
 
 - **macOS** with [Things 3](https://culturedcode.com/things/) installed
-- **Node.js >= 18**
-- A server running `shared-things-server` (see [Server Setup](#server-setup))
+- **Node.js >= 18** and **pnpm**
+- A server (VPS, Docker, or local machine) for the sync server
 
-## Usage
+## Setup Guide
 
-### Interactive Mode
+### Step 1: Deploy the Server
 
-```bash
-shared-things init
-```
-```
-? Server URL: https://things.yourdomain.com
-? API Key: ****
-? Project name in Things: Shared Project
-? Things auth token: ****
-```
+Choose one option:
 
-> **Things auth token:** Required for syncing updates to existing todos. Find it in Things → Settings → General → Things URLs → Enable Things URLs.
-
-### After Setup
+**Option A: Docker (recommended)**
 
 ```bash
-shared-things start     # Start daemon (auto-runs on login)
-shared-things status    # Check sync status
-shared-things logs -f   # Follow sync logs
+git clone https://github.com/yungweng/shared-things.git
+cd shared-things
+docker compose up -d
 ```
 
-### All Commands
+**Option B: Direct**
+
+```bash
+git clone https://github.com/yungweng/shared-things.git
+cd shared-things
+pnpm install && pnpm build
+node packages/server/dist/cli.js start -d --port 3334
+```
+
+### Step 2: Create Users
+
+```bash
+# Docker
+docker compose exec shared-things \
+  node packages/server/dist/cli.js create-user -n alice
+
+# Direct
+node packages/server/dist/cli.js create-user -n alice
+```
+
+Save the API key — it can't be retrieved later. Repeat for each user.
+
+### Step 3: Prepare Things
+
+On **each Mac**:
+
+1. Open Things 3
+2. Create a new, **empty** project (e.g. "Shared Things")
+3. Go to **Things > Settings > General > Things URLs > Manage**
+4. Copy the auth token
+
+> The project must have the same name on every Mac.
+
+### Step 4: Install the Daemon
+
+On **each Mac**:
+
+```bash
+git clone https://github.com/yungweng/shared-things.git
+cd shared-things
+pnpm install && pnpm build
+
+node packages/daemon/dist/cli.js init
+```
+
+The wizard will ask for:
+
+| Prompt | What to enter |
+|--------|--------------|
+| Server URL | `https://your-server:3334` |
+| API Key | The key from Step 2 |
+| Things project | Select the empty project from Step 3 |
+| Things Auth Token | The token from Step 3 |
+
+The wizard offers to install a LaunchAgent so the daemon starts automatically on login.
+
+### Step 5: Verify
+
+```bash
+# Check that everything is connected
+node packages/daemon/dist/cli.js doctor
+
+# Watch the sync logs
+tail -f ~/.shared-things/sync.log
+```
+
+Create a todo in the shared Things project — it should appear on the other Mac within ~1 second.
+
+## Client Commands
 
 | Command | Description |
 |---------|-------------|
 | `init` | Setup wizard |
-| `start` | Start launchd daemon (auto-starts on login) |
-| `stop` | Stop launchd daemon |
-| `status` | Show sync status & last sync time |
-| `sync` | Force immediate sync |
+| `start` | Start daemon (auto-starts on login) |
+| `stop` | Stop daemon |
+| `status` | Show sync status and connection state |
+| `sync` | Force one-time sync |
 | `logs [-f]` | Show logs (`-f` to follow) |
 | `conflicts [--all]` | Show conflict history |
-| `repair` | Diagnose state issues (no auto-fix) |
+| `doctor` | Health check |
 | `reset --local` | Clear local state (re-sync from server) |
-| `reset --server` | Clear server data for this user |
-| `doctor` | Comprehensive health check |
+| `reset --server` | Clear your data on the server |
 
-## Server Setup
-
-One person hosts the server. Everyone else just needs an API key.
-
-```bash
-# Install
-npm install -g shared-things-server
-
-# Create a user (generates API key)
-shared-things-server create-user
-# → User "alice" created. API key: sk_abc123...
-
-# Start server
-shared-things-server start -d --port 3334
-```
-
-### Server Commands
+## Server Commands
 
 | Command | Description |
 |---------|-------------|
 | `start [-d] [-p port]` | Start server (`-d` for background) |
 | `stop` | Stop background server |
-| `status` | Show server status |
-| `logs [-f]` | Show logs (`-f` to follow) |
-| `create-user` | Create user and generate API key |
+| `status` | Show status and connected clients |
+| `create-user [-n name]` | Create user and generate API key |
 | `list-users` | List all users |
-| `delete-user` | Delete a user |
+| `delete-user` | Delete a user and their data |
+| `list-todos [-u user]` | List all todos |
 | `reset` | Delete all todos (keeps users) |
+| `purge` | Delete entire database |
+
+## What Syncs
+
+| Synced | Not Synced |
+|--------|------------|
+| Title, notes, due date, tags, status | Checklist items |
+| Creation, updates, deletion | Headings, areas |
+| Position/ordering | Repeating tasks |
+
+> Deletion moves todos to the Things trash (Papierkorb). It does not permanently delete them.
+
+## How Sync Works
+
+- **Local change detection:** `fs.watch` on the Things SQLite WAL file (with 60s fallback poll)
+- **Client → Server:** `POST /push` with changed todos
+- **Server → Client:** WebSocket pushes deltas to connected clients
+- **Conflict resolution:** Last write wins, with user ID as tiebreaker for equal timestamps
+- **ID mapping:** Server assigns UUIDs; each daemon maps them to local Things IDs
+
+## Production Deployment
 
 <details>
-<summary><strong>Production Deployment</strong></summary>
-
-### systemd Service
-
-```bash
-sudo tee /etc/systemd/system/shared-things.service << 'EOF'
-[Unit]
-Description=shared-things sync server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/shared-things-server start --port 3334
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl enable --now shared-things
-```
-
-### HTTPS with Caddy
+<summary><strong>HTTPS with Caddy</strong></summary>
 
 ```
 things.yourdomain.com {
@@ -144,23 +192,28 @@ things.yourdomain.com {
 
 </details>
 
-## What Syncs
+<details>
+<summary><strong>systemd Service</strong></summary>
 
-| Synced | Not Synced |
-|--------|------------|
-| Todo title, notes, due date, tags, status | Checklist items |
-|  | Headings, Areas |
-| | Areas |
+```bash
+sudo tee /etc/systemd/system/shared-things.service << 'EOF'
+[Unit]
+Description=shared-things sync server
+After=network.target
 
-> **Note:** The project must exist in each user's Things app. Only items within that project sync.
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /path/to/shared-things/packages/server/dist/cli.js start --port 3334
+Restart=always
 
-## How It Works
+[Install]
+WantedBy=multi-user.target
+EOF
 
+sudo systemctl enable --now shared-things
 ```
-Things User A ←→ Daemon A ←→ Server ←→ Daemon B ←→ Things User B
-```
 
-Each daemon polls Things every 30 seconds via AppleScript, pushes changes to the server, and pulls updates to apply via Things URL Scheme. Server is the single source of truth (last write wins).
+</details>
 
 ## Development
 
@@ -168,23 +221,11 @@ Each daemon polls Things every 30 seconds via AppleScript, pushes changes to the
 git clone https://github.com/yungweng/shared-things.git
 cd shared-things
 pnpm install
-pnpm build
+pnpm build     # Build all packages
+pnpm dev       # Watch mode
+pnpm lint      # Check with Biome
+pnpm typecheck # TypeScript check
 ```
-
-## Contributing
-
-Issues and PRs welcome! See [open issues](https://github.com/yungweng/shared-things/issues).
-
-## Links
-
-- [Repository](https://github.com/yungweng/shared-things)
-- [Issues](https://github.com/yungweng/shared-things/issues)
-- [npm (daemon)](https://www.npmjs.com/package/shared-things-daemon)
-- [npm (server)](https://www.npmjs.com/package/shared-things-server)
-
-## Author
-
-Maintained by [@yungweng](https://github.com/yungweng)
 
 ## License
 

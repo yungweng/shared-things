@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-shared-things syncs a Things 3 project between multiple macOS users via a central REST server. Each user runs a local daemon that polls Things every 30 seconds, pushes changes to the server, and pulls changes to apply locally via Things URL Scheme.
+shared-things (v3) syncs a Things 3 project between multiple macOS users via a central REST+WebSocket server. Each user runs a local daemon that watches the Things SQLite WAL file for changes, pushes to the server via REST, and receives real-time deltas via WebSocket.
 
 ## Commands
 
@@ -29,10 +29,13 @@ pnpm --filter @shared-things/server build
 pnpm --filter @shared-things/daemon build
 pnpm --filter @shared-things/common build
 
-# Run server locally (development)
+# Run server locally
 node packages/server/dist/cli.js start --port 3334
 
-# Create server users (interactive prompt)
+# Run server via Docker
+docker compose up -d
+
+# Create server users
 node packages/server/dist/cli.js create-user
 
 # Test daemon locally (after build)
@@ -44,66 +47,57 @@ node packages/daemon/dist/cli.js sync
 
 Biome enforces tabs for indentation and double quotes. Run `pnpm lint:fix` before committing.
 
-## Published Packages
-
-- `shared-things-daemon` - CLI client for macOS users
-- `shared-things-server` - Self-hosted sync server
-
-Internal workspace packages use `@shared-things/*` naming.
-
 ## Architecture
 
 **Monorepo structure with pnpm workspaces:**
 
-- `packages/common/` - Shared TypeScript types (`Todo`, `Heading`, `ProjectState`, `SyncDelta`, `PushRequest`) and validation utilities
-- `packages/server/` - Fastify REST API with SQLite (better-sqlite3), runs on Linux VPS
-- `packages/daemon/` - macOS CLI client using Commander.js, interacts with Things via AppleScript/osascript
+- `packages/common/` - Shared TypeScript types, WebSocket protocol definitions, validation
+- `packages/server/` - Fastify REST API + WebSocket (ws) with SQLite (better-sqlite3)
+- `packages/daemon/` - macOS CLI client using Commander.js, interacts with Things via AppleScript
 
-**Data flow:**
+**Data flow (v3 — event-driven):**
 
-1. Daemon reads Things via AppleScript (`things.ts`)
-2. Detects changes by comparing against local state file (`~/.shared-things/state.json`)
-3. Pushes changes to server with `serverIdToThingsId` mapping for cross-device correlation
-4. Pulls delta from server, creates/updates todos via Things URL Scheme
+1. `fs.watch` on Things SQLite WAL file detects local changes (no polling)
+2. Daemon reads Things project via AppleScript, diffs against local state
+3. Pushes changes to server via `POST /push`
+4. Server processes changes, notifies other clients via WebSocket
+5. Remote clients apply changes: create (AppleScript), update (URL Scheme), delete (AppleScript move to Papierkorb)
 
-**Key sync detail:** Server uses its own IDs (`id` field), while Things has different IDs (`thingsId`). The daemon maintains a `serverIdToThingsId` map in local state to correlate items across devices.
+**Key v3 improvements over v2:**
+- File watcher replaces 30s polling (with 60s fallback poll)
+- WebSocket for server→client push (no client-side polling for remote changes)
+- AppleScript `make new to do` returns ID atomically (no findNewTodo retry loop)
+- Deletion via AppleScript `move to list "Papierkorb"` (v2 couldn't delete)
+
+**ID mapping:** Server uses its own UUIDs (`id`), while Things has different IDs (`thingsId`). Each daemon maintains a `serverIdToThingsId` map in local state.
 
 ## Server Endpoints
 
 - `GET /health` - No auth required
 - `GET /state` - Full project state
 - `GET /delta?since=<timestamp>` - Changes since timestamp
-- `POST /push` - Push local changes
-- `DELETE /reset` - Delete all user's data (clean slate)
+- `POST /push` - Push local changes (triggers WebSocket notification to others)
+- `DELETE /reset` - Delete all user's data
+- `WS /ws` - WebSocket for real-time deltas (auth via first message)
 
 All except `/health` require `Authorization: Bearer <api-key>` header.
 
 ## Data Storage
 
-- **Server:** `~/.shared-things-server/data.db` (SQLite)
+- **Server:** `~/.shared-things-server/data.db` (SQLite) or `/data/data.db` (Docker)
 - **Client:** `~/.shared-things/config.json`, `~/.shared-things/state.json`
 - **LaunchAgent:** `~/Library/LaunchAgents/com.shared-things.daemon.plist`
 
-## Publishing
+## Docker
 
 ```bash
-# 1. Bump versions
-pnpm --filter shared-things-daemon exec npm version patch  # or minor/major
-pnpm --filter shared-things-server exec npm version patch
-
-# 2. Commit and push
-git add -A && git commit -m "chore: bump to vX.Y.Z" && git push
-
-# 3. Tag and release (triggers CD pipeline)
-git tag vX.Y.Z && git push origin vX.Y.Z
-gh release create vX.Y.Z --generate-notes
+docker compose up -d                    # Start server
+docker compose exec shared-things \
+  node packages/server/dist/cli.js create-user  # Create user inside container
 ```
-
-Publishing is automated via GitHub Actions with OIDC trusted publishing (no npm tokens).
 
 ## Limitations
 
-- Things URL Scheme can create todos but has limited update capabilities (requires auth token)
-- Deletions are tracked but cannot be auto-executed in Things
-- Headings sync support is partial due to AppleScript limitations
-- Polling-based (30s interval), not real-time
+- Things URL Scheme can update title, notes, due date, status — but not tags or position
+- File watcher may miss changes during WAL checkpoint (60s fallback poll handles this)
+- AppleScript move to Papierkorb works but cannot permanently delete

@@ -24,7 +24,6 @@ export function loadConfig(): DaemonConfig | null {
 	if (!fs.existsSync(CONFIG_PATH)) {
 		return null;
 	}
-
 	try {
 		const content = fs.readFileSync(CONFIG_PATH, "utf-8");
 		return JSON.parse(content) as DaemonConfig;
@@ -35,7 +34,9 @@ export function loadConfig(): DaemonConfig | null {
 
 export function saveConfig(config: DaemonConfig): void {
 	ensureConfigDir();
-	fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+	fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), {
+		mode: 0o600,
+	});
 }
 
 export function configExists(): boolean {

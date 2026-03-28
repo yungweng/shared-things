@@ -1,20 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * shared-things-server CLI
+ * shared-things-server CLI (v3)
  */
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import cors from "@fastify/cors";
 import { confirm, input } from "@inquirer/prompts";
 import chalk from "chalk";
 import { Command } from "commander";
-import Fastify from "fastify";
-import updateNotifier from "update-notifier";
-import { authMiddleware } from "./auth.js";
 import {
 	createUser,
 	getAllTodos,
@@ -23,61 +19,7 @@ import {
 	listUsers,
 	userExists,
 } from "./db.js";
-import { registerRoutes } from "./routes.js";
 
-// Read version from package.json
-const pkg = JSON.parse(
-	fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
-);
-
-// Check for updates
-const updateCheckInterval = 1000 * 60 * 60; // 1 hour
-const notifier = updateNotifier({ pkg, updateCheckInterval });
-
-// Validate cached update against current version (user may have upgraded)
-if (notifier.update) {
-	notifier.update.current = pkg.version;
-	if (notifier.update.current === notifier.update.latest) {
-		notifier.update = undefined;
-	}
-}
-
-// Detect first run and fetch immediately if needed
-const lastCheck = (notifier.config?.get("lastUpdateCheck") as number) ?? 0;
-const isFirstRun = Date.now() - lastCheck < 1000;
-const intervalPassed = Date.now() - lastCheck >= updateCheckInterval;
-
-if (!notifier.update && (isFirstRun || intervalPassed)) {
-	try {
-		const update = await notifier.fetchInfo();
-		notifier.config?.set("lastUpdateCheck", Date.now());
-		if (update && update.type !== "latest") {
-			notifier.update = update;
-		}
-	} catch {
-		// Ignore network errors
-	}
-}
-
-// Re-cache update for next run
-if (notifier.update && notifier.update.current !== notifier.update.latest) {
-	notifier.config?.set("update", notifier.update);
-} else {
-	notifier.config?.delete("update");
-}
-
-// Show notification on exit
-process.on("exit", () => {
-	if (notifier.update && notifier.update.current !== notifier.update.latest) {
-		console.error(
-			chalk.yellow(
-				`\n  Update available: ${notifier.update.current} → ${notifier.update.latest}`,
-			) + chalk.dim(`\n  Run: npm i -g ${pkg.name}\n`),
-		);
-	}
-});
-
-// Data directory for server files
 const DATA_DIR =
 	process.env.DATA_DIR || path.join(os.homedir(), ".shared-things-server");
 const PID_FILE = path.join(DATA_DIR, "server.pid");
@@ -94,14 +36,12 @@ function isServerRunning(): { running: boolean; pid?: number } {
 		return { running: false };
 	}
 
-	const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+	const pid = Number.parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
 
 	try {
-		// Check if process exists (signal 0 doesn't kill, just checks)
 		process.kill(pid, 0);
 		return { running: true, pid };
 	} catch {
-		// Process doesn't exist, clean up stale PID file
 		fs.unlinkSync(PID_FILE);
 		return { running: false };
 	}
@@ -111,45 +51,36 @@ const program = new Command();
 
 program
 	.name("shared-things-server")
-	.description("Sync server for Things 3 projects")
-	.version(pkg.version);
+	.description("Sync server for Things 3 projects (v3)")
+	.version("3.0.0");
 
 // =============================================================================
-// start command
+// start
 // =============================================================================
 program
 	.command("start")
 	.description("Start the sync server")
 	.option("-p, --port <port>", "Port to listen on", "3334")
 	.option("--host <host>", "Host to bind to", "0.0.0.0")
-	.option("-d, --detach", "Run server in background (detached mode)")
+	.option("-d, --detach", "Run server in background")
 	.action(async (options) => {
-		const PORT = parseInt(options.port, 10);
+		const PORT = Number.parseInt(options.port, 10);
 		const HOST = options.host;
 		const isChildProcess = process.env.SHARED_THINGS_DETACHED === "1";
 
-		// Check if already running (skip for child process)
 		if (!isChildProcess) {
 			const status = isServerRunning();
 			if (status.running) {
 				console.log(
-					chalk.yellow(`\n⚠️  Server already running (PID: ${status.pid})`),
-				);
-				console.log(
-					chalk.dim('Use "shared-things-server stop" to stop it first.\n'),
+					chalk.yellow(`\nServer already running (PID: ${status.pid})`),
 				);
 				return;
 			}
 		}
 
-		// Detached mode: spawn new process in background
 		if (options.detach) {
 			ensureDataDir();
-
-			// Open log file for stdout/stderr
 			const logFd = fs.openSync(LOG_FILE, "a");
-
-			// Find the CLI script path
 			const scriptPath = process.argv[1];
 
 			const child = spawn(
@@ -162,43 +93,28 @@ program
 				},
 			);
 
-			// Write PID file
 			fs.writeFileSync(PID_FILE, String(child.pid));
-
 			child.unref();
 			fs.closeSync(logFd);
 
-			console.log(chalk.green(`\n✅ Server started in background`));
+			console.log(chalk.green("\nServer started in background"));
 			console.log(`  ${chalk.dim("PID:")}  ${child.pid}`);
 			console.log(`  ${chalk.dim("URL:")}  http://${HOST}:${PORT}`);
-			console.log(`  ${chalk.dim("Logs:")} ${LOG_FILE}`);
-			console.log(
-				chalk.dim('\nUse "shared-things-server logs -f" to follow logs'),
-			);
-			console.log(
-				chalk.dim('Use "shared-things-server stop" to stop the server\n'),
-			);
+			console.log(`  ${chalk.dim("Logs:")} ${LOG_FILE}\n`);
 			return;
 		}
 
 		// Foreground mode
-		const db = initDatabase();
-
-		// In detached mode, use simple logger (no pino-pretty transport)
-		const app = Fastify({
-			logger: true,
+		const { createServer } = await import("./index.js");
+		const { app, wsManager } = await createServer({
+			port: PORT,
+			host: HOST,
+			logger: !isChildProcess,
 		});
 
-		await app.register(cors, {
-			origin: true,
-		});
-
-		app.addHook("preHandler", authMiddleware(db));
-		registerRoutes(app, db);
-
-		// Handle graceful shutdown
 		const shutdown = async () => {
 			console.log(chalk.dim("\nShutting down..."));
+			wsManager.close();
 			await app.close();
 			if (fs.existsSync(PID_FILE)) {
 				fs.unlinkSync(PID_FILE);
@@ -208,49 +124,37 @@ program
 		process.on("SIGTERM", shutdown);
 		process.on("SIGINT", shutdown);
 
-		try {
-			await app.listen({ port: PORT, host: HOST });
-			if (!process.env.SHARED_THINGS_DETACHED) {
-				console.log(
-					chalk.green(`\n✅ Server running at http://${HOST}:${PORT}\n`),
-				);
-			}
-		} catch (err) {
-			app.log.error(err);
-			process.exit(1);
+		if (!isChildProcess) {
+			console.log(chalk.green(`\nServer running at http://${HOST}:${PORT}\n`));
 		}
 	});
 
 // =============================================================================
-// stop command
+// stop
 // =============================================================================
 program
 	.command("stop")
 	.description("Stop the background server")
 	.action(() => {
 		const status = isServerRunning();
-
 		if (!status.running) {
-			console.log(chalk.yellow("\n⚠️  Server is not running.\n"));
+			console.log(chalk.yellow("\nServer is not running.\n"));
 			return;
 		}
 
 		try {
 			process.kill(status.pid!, "SIGTERM");
-			// Wait a bit for graceful shutdown
 			setTimeout(() => {
-				if (fs.existsSync(PID_FILE)) {
-					fs.unlinkSync(PID_FILE);
-				}
+				if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
 			}, 500);
-			console.log(chalk.green(`\n✅ Server stopped (PID: ${status.pid})\n`));
+			console.log(chalk.green(`\nServer stopped (PID: ${status.pid})\n`));
 		} catch (err) {
-			console.log(chalk.red(`\n❌ Failed to stop server: ${err}\n`));
+			console.log(chalk.red(`\nFailed to stop server: ${err}\n`));
 		}
 	});
 
 // =============================================================================
-// status command
+// status
 // =============================================================================
 program
 	.command("status")
@@ -258,30 +162,21 @@ program
 	.action(() => {
 		const status = isServerRunning();
 
-		console.log(chalk.bold("\n📊 Server Status\n"));
-
-		// Version info
-		let versionLine = `  ${chalk.dim("Version:")} ${pkg.version}`;
-		if (notifier.update && notifier.update.current !== notifier.update.latest) {
-			versionLine += chalk.yellow(` → ${notifier.update.latest} available`);
-		}
-		console.log(versionLine);
+		console.log(chalk.bold("\nServer Status\n"));
 
 		if (status.running) {
-			console.log(`  ${chalk.dim("Status:")}  ${chalk.green("● running")}`);
+			console.log(`  ${chalk.dim("Status:")}  ${chalk.green("running")}`);
 			console.log(`  ${chalk.dim("PID:")}     ${status.pid}`);
 		} else {
-			console.log(`  ${chalk.dim("Status:")}  ${chalk.red("○ stopped")}`);
+			console.log(`  ${chalk.dim("Status:")}  ${chalk.red("stopped")}`);
 		}
 
-		// Show log file info
 		if (fs.existsSync(LOG_FILE)) {
 			const stats = fs.statSync(LOG_FILE);
 			const sizeKB = Math.round(stats.size / 1024);
 			console.log(`  ${chalk.dim("Logs:")}    ${LOG_FILE} (${sizeKB}KB)`);
 		}
 
-		// Show database info
 		const dbPath = path.join(DATA_DIR, "data.db");
 		if (fs.existsSync(dbPath)) {
 			const db = initDatabase();
@@ -295,7 +190,7 @@ program
 	});
 
 // =============================================================================
-// logs command
+// logs
 // =============================================================================
 program
 	.command("logs")
@@ -324,7 +219,7 @@ program
 	});
 
 // =============================================================================
-// create-user command
+// create-user
 // =============================================================================
 program
 	.command("create-user")
@@ -332,13 +227,10 @@ program
 	.option("-n, --name <name>", "Username")
 	.action(async (options) => {
 		const db = initDatabase();
-
 		let name = options.name;
 
 		if (!name) {
-			// Interactive mode
-			console.log(chalk.bold("\n👤 Create New User\n"));
-
+			console.log(chalk.bold("\nCreate New User\n"));
 			name = await input({
 				message: "Username",
 				validate: (value) => {
@@ -350,54 +242,51 @@ program
 			});
 		}
 
-		// Check if user exists (for non-interactive mode)
 		if (userExists(db, name.trim())) {
-			console.log(chalk.red(`\n❌ User "${name.trim()}" already exists.\n`));
+			console.log(chalk.red(`\nUser "${name.trim()}" already exists.\n`));
 			process.exit(1);
 		}
 
 		const { id, apiKey } = createUser(db, name.trim());
 
-		console.log(chalk.green("\n✅ User created successfully!\n"));
+		console.log(chalk.green("\nUser created!\n"));
 		console.log(`  ${chalk.dim("ID:")}       ${id}`);
 		console.log(`  ${chalk.dim("Name:")}     ${name}`);
 		console.log(`  ${chalk.dim("API Key:")}  ${chalk.cyan(apiKey)}`);
 		console.log(
-			chalk.yellow("\n⚠️  Save this API key - it cannot be retrieved later!\n"),
+			chalk.yellow("\nSave this API key - it cannot be retrieved later!\n"),
 		);
 	});
 
 // =============================================================================
-// list-users command
+// list-users
 // =============================================================================
 program
 	.command("list-users")
 	.description("List all users")
-	.action(async () => {
+	.action(() => {
 		const db = initDatabase();
 		const users = listUsers(db);
 
 		if (users.length === 0) {
 			console.log(chalk.yellow("\nNo users found.\n"));
-			console.log(
-				chalk.dim("Create a user with: shared-things-server create-user\n"),
-			);
-		} else {
-			console.log(chalk.bold(`\n👥 Users (${users.length})\n`));
-			for (const user of users) {
-				console.log(`  ${chalk.white(user.name)} ${chalk.dim(`(${user.id})`)}`);
-				console.log(`    ${chalk.dim("Created:")} ${user.createdAt}`);
-			}
-			console.log();
+			return;
 		}
+
+		console.log(chalk.bold(`\nUsers (${users.length})\n`));
+		for (const user of users) {
+			console.log(`  ${chalk.white(user.name)} ${chalk.dim(`(${user.id})`)}`);
+			console.log(`    ${chalk.dim("Created:")} ${user.createdAt}`);
+		}
+		console.log();
 	});
 
 // =============================================================================
-// delete-user command
+// delete-user
 // =============================================================================
 program
 	.command("delete-user")
-	.description("Delete a user")
+	.description("Delete a user and their data")
 	.option("-n, --name <name>", "Username to delete")
 	.action(async (options) => {
 		const db = initDatabase();
@@ -409,11 +298,8 @@ program
 		}
 
 		let name = options.name;
-
 		if (!name) {
-			// Show users and ask which to delete
-			console.log(chalk.bold("\n🗑️  Delete User\n"));
-			console.log("Available users:");
+			console.log(chalk.bold("\nDelete User\n"));
 			for (const user of users) {
 				console.log(`  - ${user.name}`);
 			}
@@ -432,12 +318,12 @@ program
 
 		const user = users.find((u) => u.name === name);
 		if (!user) {
-			console.log(chalk.red(`\n❌ User "${name}" not found.\n`));
+			console.log(chalk.red(`\nUser "${name}" not found.\n`));
 			return;
 		}
 
 		const confirmed = await confirm({
-			message: `Delete user "${name}"? This will also delete all their data.`,
+			message: `Delete user "${name}" and all their data?`,
 			default: false,
 		});
 
@@ -446,96 +332,80 @@ program
 			return;
 		}
 
-		// Delete user and their data
-		db.prepare("DELETE FROM todos WHERE updated_by = ?").run(user.id);
+		db.prepare("DELETE FROM todos WHERE updated_by = ? OR created_by = ?").run(
+			user.id,
+			user.id,
+		);
 		db.prepare("DELETE FROM deleted_items WHERE deleted_by = ?").run(user.id);
 		db.prepare("DELETE FROM users WHERE id = ?").run(user.id);
 
-		console.log(chalk.green(`\n✅ User "${name}" deleted.\n`));
+		console.log(chalk.green(`\nUser "${name}" deleted.\n`));
 	});
 
 // =============================================================================
-// list-todos command
+// list-todos
 // =============================================================================
 program
 	.command("list-todos")
 	.description("List all todos")
 	.option("-u, --user <name>", "Filter by username")
-	.action(async (options) => {
+	.action((options) => {
 		const db = initDatabase();
 		const todos = getAllTodosWithMeta(db);
 		const users = listUsers(db);
-
-		// Create user lookup map
 		const userMap = new Map(users.map((u) => [u.id, u.name]));
 
-		// Filter by user if specified
-		let filteredTodos = todos;
+		let filtered = todos;
 		if (options.user) {
 			const user = users.find((u) => u.name === options.user);
 			if (!user) {
-				console.log(chalk.red(`\n❌ User "${options.user}" not found.\n`));
+				console.log(chalk.red(`\nUser "${options.user}" not found.\n`));
 				return;
 			}
-			filteredTodos = todos.filter((t) => t.updatedBy === user.id);
+			filtered = todos.filter((t) => t.updatedBy === user.id);
 		}
 
-		if (filteredTodos.length === 0) {
+		if (filtered.length === 0) {
 			console.log(chalk.yellow("\nNo todos found.\n"));
 			return;
 		}
 
-		const title = options.user
-			? `📋 Todos by ${options.user} (${filteredTodos.length})`
-			: `📋 Todos (${filteredTodos.length})`;
-		console.log(chalk.bold(`\n${title}\n`));
-
-		for (const todo of filteredTodos) {
+		console.log(chalk.bold(`\nTodos (${filtered.length})\n`));
+		for (const todo of filtered) {
 			const userName = userMap.get(todo.updatedBy) || "unknown";
-			const statusIcon =
+			const icon =
 				todo.status === "completed"
-					? "✓"
+					? chalk.green("v")
 					: todo.status === "canceled"
-						? "✗"
-						: "○";
-			const statusColor =
-				todo.status === "completed"
-					? chalk.green
-					: todo.status === "canceled"
-						? chalk.red
-						: chalk.white;
+						? chalk.red("x")
+						: chalk.white("o");
 
-			console.log(`  ${statusColor(statusIcon)} ${chalk.white(todo.title)}`);
-
+			console.log(`  ${icon} ${chalk.white(todo.title)}`);
 			if (todo.notes) {
-				const shortNotes =
+				const short =
 					todo.notes.length > 50
 						? `${todo.notes.substring(0, 50)}...`
 						: todo.notes;
-				console.log(`    ${chalk.dim("Notes:")} ${shortNotes}`);
+				console.log(`    ${chalk.dim("Notes:")} ${short}`);
 			}
-			if (todo.dueDate) {
-				console.log(`    ${chalk.dim("Due:")} ${todo.dueDate}`);
-			}
-			if (todo.tags && todo.tags.length > 0) {
+			if (todo.dueDate) console.log(`    ${chalk.dim("Due:")} ${todo.dueDate}`);
+			if (todo.tags?.length)
 				console.log(`    ${chalk.dim("Tags:")} ${todo.tags.join(", ")}`);
-			}
 			console.log(
-				`    ${chalk.dim("Status:")} ${todo.status} ${chalk.dim("|")} ${chalk.dim("By:")} ${userName} ${chalk.dim("|")} ${todo.updatedAt}`,
+				`    ${chalk.dim(`${todo.status} | By: ${userName} | ${todo.updatedAt}`)}`,
 			);
 			console.log();
 		}
 	});
 
 // =============================================================================
-// reset command
+// reset
 // =============================================================================
 program
 	.command("reset")
 	.description("Delete all todos (keeps users)")
 	.action(async () => {
 		const db = initDatabase();
-
 		const todos = getAllTodos(db);
 
 		if (todos.length === 0) {
@@ -543,9 +413,8 @@ program
 			return;
 		}
 
-		console.log(chalk.bold("\n🔄 Reset Server Data\n"));
-		console.log(`  ${chalk.dim("Todos:")} ${todos.length}`);
-		console.log();
+		console.log(chalk.bold("\nReset Server Data\n"));
+		console.log(`  ${chalk.dim("Todos:")} ${todos.length}\n`);
 
 		const confirmed = await confirm({
 			message: "Delete all todos? Users will be kept.",
@@ -559,29 +428,25 @@ program
 
 		db.prepare("DELETE FROM todos").run();
 		db.prepare("DELETE FROM deleted_items").run();
-
-		console.log(chalk.green("\n✅ All todos deleted. Users preserved.\n"));
+		console.log(chalk.green("\nAll todos deleted. Users preserved.\n"));
 	});
 
 // =============================================================================
-// purge command
+// purge
 // =============================================================================
 program
 	.command("purge")
-	.description("Delete entire database (all data including users)")
+	.description("Delete entire database")
 	.action(async () => {
-		const dataDir =
-			process.env.DATA_DIR || path.join(os.homedir(), ".shared-things-server");
-		const dbPath = path.join(dataDir, "data.db");
+		const dbPath = path.join(DATA_DIR, "data.db");
 
 		if (!fs.existsSync(dbPath)) {
 			console.log(chalk.yellow("\nNo database to purge.\n"));
 			return;
 		}
 
-		console.log(chalk.bold("\n⚠️  Purge Server\n"));
-		console.log(`  ${chalk.dim("Database:")} ${dbPath}`);
-		console.log();
+		console.log(chalk.bold("\nPurge Server\n"));
+		console.log(`  ${chalk.dim("Database:")} ${dbPath}\n`);
 
 		const confirmed = await confirm({
 			message: "Delete the entire database? This cannot be undone!",
@@ -593,16 +458,11 @@ program
 			return;
 		}
 
-		// Delete database files (including WAL and SHM)
 		fs.unlinkSync(dbPath);
 		if (fs.existsSync(`${dbPath}-wal`)) fs.unlinkSync(`${dbPath}-wal`);
 		if (fs.existsSync(`${dbPath}-shm`)) fs.unlinkSync(`${dbPath}-shm`);
 
-		console.log(
-			chalk.green(
-				'\n✅ Database deleted. Run "shared-things-server create-user" to start fresh.\n',
-			),
-		);
+		console.log(chalk.green("\nDatabase deleted.\n"));
 	});
 
 program.parse();

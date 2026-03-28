@@ -1,9 +1,12 @@
 /**
- * Things 3 integration via AppleScript and URL Scheme
+ * Things 3 integration via AppleScript and URL Scheme (v3)
+ *
+ * Key v3 changes:
+ * - createTodo uses AppleScript (returns ID atomically, no polling needed)
+ * - deleteTodo moves to Papierkorb via AppleScript
  */
 
 import { execSync } from "node:child_process";
-import { logWarn } from "./logger.js";
 
 export interface ThingsTodo {
 	thingsId: string;
@@ -16,16 +19,12 @@ export interface ThingsTodo {
 
 const PIPE_TOKEN = "{{PIPE}}";
 const CARET_TOKEN = "{{CARET}}";
-const MAX_URL_LENGTH = 2000;
 
-/**
- * Execute AppleScript and return result
- */
 function runAppleScript(script: string): string {
 	try {
 		return execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, {
 			encoding: "utf-8",
-			maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+			maxBuffer: 10 * 1024 * 1024,
 		}).trim();
 	} catch (error) {
 		throw new Error(`AppleScript failed: ${error}`);
@@ -66,7 +65,6 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
         set todoTags to my escapeText((tag names of t) as string)
         set AppleScript's text item delimiters to ""
 
-        -- Format due date
         set dueDateStr to ""
         if todoDue is not missing value then
           set dueDateStr to (year of todoDue as string) & "-" & ¬
@@ -74,7 +72,6 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
             (text -2 thru -1 of ("0" & (day of todoDue) as string))
         end if
 
-        -- Format status
         set statusStr to "open"
         if todoStatus is completed then
           set statusStr to "completed"
@@ -95,16 +92,15 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
 
 	return result.split("^^^").map((line) => {
 		const [thingsId, title, notes, dueDate, tags, status] = line.split("|||");
-		const decodedTitle = unescapeField(title);
-		const decodedNotes = unescapeField(notes);
-		const decodedTags = unescapeField(tags);
 		return {
 			thingsId,
-			title: decodedTitle || "",
-			notes: decodedNotes || "",
+			title: unescapeField(title) || "",
+			notes: unescapeField(notes) || "",
 			dueDate: dueDate || null,
-			tags: decodedTags ? decodedTags.split(", ").filter(Boolean) : [],
-			status: (status as "open" | "completed" | "canceled") || "open",
+			tags: unescapeField(tags)
+				? unescapeField(tags).split(", ").filter(Boolean)
+				: [],
+			status: (status as ThingsTodo["status"]) || "open",
 		};
 	});
 }
@@ -115,7 +111,9 @@ function unescapeField(value: string): string {
 }
 
 /**
- * Create a new todo in Things via URL scheme
+ * Create a new todo via AppleScript (returns the Things ID atomically)
+ *
+ * This is the key v3 improvement: no more URL Scheme + findNewTodo polling.
  */
 export function createTodo(
 	projectName: string,
@@ -125,34 +123,51 @@ export function createTodo(
 		dueDate?: string;
 		tags?: string[];
 	},
-): void {
-	const params = new URLSearchParams();
-	params.set("title", todo.title);
-	if (todo.notes) params.set("notes", todo.notes);
-	if (todo.dueDate) params.set("when", todo.dueDate);
-	if (todo.tags?.length) params.set("tags", todo.tags.join(","));
-	params.set("list", projectName);
+): string {
+	// Escape for AppleScript string
+	const escTitle = todo.title.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+	const escNotes = (todo.notes || "")
+		.replace(/\\/g, "\\\\")
+		.replace(/"/g, '\\"');
 
-	// URLSearchParams encodes spaces as '+', but Things expects '%20'
-	let url = `things:///add?${params.toString().replace(/\+/g, "%20")}`;
-	if (url.length > MAX_URL_LENGTH && todo.notes) {
-		const originalNotes = todo.notes;
-		let truncated = originalNotes;
-		while (truncated.length > 0 && url.length > MAX_URL_LENGTH) {
-			truncated = truncated.slice(0, Math.max(0, truncated.length - 200));
-			params.set("notes", truncated);
-			url = `things:///add?${params.toString().replace(/\+/g, "%20")}`;
-		}
-		logWarn(
-			`Create URL exceeded ${MAX_URL_LENGTH} chars; notes truncated from ${originalNotes.length} to ${truncated.length}`,
-		);
+	let props = `name:"${escTitle}", notes:"${escNotes}"`;
+
+	if (todo.tags?.length) {
+		const escTags = todo.tags
+			.map((t) => t.replace(/\\/g, "\\\\").replace(/"/g, '\\"'))
+			.join(",");
+		props += `, tag names:"${escTags}"`;
 	}
-	// -g flag opens in background without stealing focus
-	execSync(`open -g "${url}"`);
+
+	let dateSetup = "";
+	if (todo.dueDate) {
+		// Parse YYYY-MM-DD and set due date
+		dateSetup = `
+      set dueStr to "${todo.dueDate}"
+      set yr to text 1 thru 4 of dueStr as integer
+      set mo to text 6 thru 7 of dueStr as integer
+      set dy to text 9 thru 10 of dueStr as integer
+      set dueD to current date
+      set year of dueD to yr
+      set month of dueD to mo
+      set day of dueD to dy
+      set due date of newTodo to dueD
+    `;
+	}
+
+	const script = `
+    tell application "Things3"
+      set newTodo to make new to do with properties {${props}} at beginning of project "${projectName}"
+      ${dateSetup}
+      return id of newTodo
+    end tell
+  `;
+
+	return runAppleScript(script);
 }
 
 /**
- * Update an existing todo via URL scheme
+ * Update an existing todo via URL Scheme
  */
 export function updateTodo(
 	authToken: string,
@@ -177,25 +192,26 @@ export function updateTodo(
 	if (updates.canceled !== undefined)
 		params.set("canceled", updates.canceled.toString());
 
-	// URLSearchParams encodes spaces as '+', but Things expects '%20'
 	const url = `things:///update?${params.toString().replace(/\+/g, "%20")}`;
-	// -g flag opens in background without stealing focus
 	execSync(`open -g "${url}"`);
 }
 
 /**
- * Get the Things URL scheme auth token (user must enable in Things settings)
+ * Delete a todo by moving it to Papierkorb (Trash) via AppleScript
+ *
+ * New in v3 — previously deletion was not possible.
  */
-export function getAuthToken(): string | null {
-	// The auth token needs to be configured by the user
-	// It's available in Things > Settings > General > Things URLs
-	// For now, we'll read it from config
-	return null;
+export function deleteTodo(thingsId: string): void {
+	// List 9 is always Trash/Papierkorb regardless of locale
+	const script = `
+    tell application "Things3"
+      set t to to do id "${thingsId}"
+      move t to list 9
+    end tell
+  `;
+	runAppleScript(script);
 }
 
-/**
- * Check if Things is running
- */
 export function isThingsRunning(): boolean {
 	try {
 		const result = runAppleScript(`
@@ -209,9 +225,6 @@ export function isThingsRunning(): boolean {
 	}
 }
 
-/**
- * Check if a project exists in Things
- */
 export function projectExists(projectName: string): boolean {
 	try {
 		const result = runAppleScript(`
@@ -230,9 +243,6 @@ export function projectExists(projectName: string): boolean {
 	}
 }
 
-/**
- * List all projects in Things
- */
 export function listProjects(): string[] {
 	const result = runAppleScript(`
     tell application "Things3"

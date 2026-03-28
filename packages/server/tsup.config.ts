@@ -16,6 +16,7 @@ export default defineConfig({
     "commander",
     "@inquirer/prompts",
     "chalk",
+    "ws",
   ],
   dts: false,
   sourcemap: false,

@@ -30,12 +30,10 @@ export function isValidPushRequest(obj: unknown): obj is PushRequest {
 	return true;
 }
 
-/** Sanitize string input */
 export function sanitizeString(input: string, maxLength = 10000): string {
 	return input.slice(0, maxLength).trim();
 }
 
-/** Validate ISO 8601 date string */
 export function isValidISODate(dateString: string): boolean {
 	const date = new Date(dateString);
 	return !Number.isNaN(date.getTime());
