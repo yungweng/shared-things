@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-shared-things (v3) syncs a Things 3 project between multiple macOS users via a central REST+WebSocket server. Each user runs a local daemon that watches the Things SQLite WAL file for changes, pushes to the server via REST, and receives real-time deltas via WebSocket.
+shared-things syncs Things 3 between multiple macOS users via a central REST+WebSocket server. Each user runs a local daemon that watches the Things SQLite WAL file for changes, pushes to the server via REST, and receives real-time deltas via WebSocket. Supports syncing a single project or an entire area (including all projects within it).
 
 ## Commands
 
@@ -13,21 +13,15 @@ shared-things (v3) syncs a Things 3 project between multiple macOS users via a c
 pnpm install
 pnpm build
 
-# Development (watch mode for all packages)
-pnpm dev
-
-# Linting & formatting (Biome)
-pnpm lint              # Check for issues
-pnpm lint:fix          # Auto-fix issues
-pnpm format            # Format code
-
-# Type checking
-pnpm typecheck
-
 # Build single package
-pnpm --filter @shared-things/server build
-pnpm --filter @shared-things/daemon build
 pnpm --filter @shared-things/common build
+pnpm --filter shared-things-server build
+pnpm --filter shared-things-daemon build
+
+# Linting & formatting (Biome — tabs, double quotes)
+pnpm lint              # Check
+pnpm lint:fix          # Auto-fix
+pnpm typecheck         # TypeScript strict check
 
 # Run server locally
 node packages/server/dist/cli.js start --port 3334
@@ -35,69 +29,64 @@ node packages/server/dist/cli.js start --port 3334
 # Run server via Docker
 docker compose up -d
 
-# Create server users
-node packages/server/dist/cli.js create-user
-
-# Test daemon locally (after build)
+# Daemon CLI (after build)
 node packages/daemon/dist/cli.js init
 node packages/daemon/dist/cli.js sync
+node packages/daemon/dist/cli.js daemon   # foreground mode (for debugging)
 ```
-
-## Code Style
-
-Biome enforces tabs for indentation and double quotes. Run `pnpm lint:fix` before committing.
 
 ## Architecture
 
-**Monorepo structure with pnpm workspaces:**
+**Monorepo (pnpm workspaces):**
 
-- `packages/common/` - Shared TypeScript types, WebSocket protocol definitions, validation
-- `packages/server/` - Fastify REST API + WebSocket (ws) with SQLite (better-sqlite3)
-- `packages/daemon/` - macOS CLI client using Commander.js, interacts with Things via AppleScript
+- `packages/common/` — Shared types (`Todo`, `PushTodo`, `SyncDelta`, `DaemonConfig`), WebSocket protocol (`ServerMessage`/`ClientMessage`), validation. Builds with `tsc`.
+- `packages/server/` — Fastify REST API + WebSocket (`ws`) + SQLite (`better-sqlite3`). Builds with `tsup`, bundles common.
+- `packages/daemon/` — macOS CLI (Commander.js + @inquirer/prompts). Interacts with Things via AppleScript (read/create/delete) and URL Scheme (update). Builds with `tsup`, bundles common.
 
-**Data flow (v3 — event-driven):**
+**Event-driven sync flow:**
 
-1. `fs.watch` on Things SQLite WAL file detects local changes (no polling)
-2. Daemon reads Things project via AppleScript, diffs against local state
-3. Pushes changes to server via `POST /push`
-4. Server processes changes, notifies other clients via WebSocket
-5. Remote clients apply changes: create (AppleScript), update (URL Scheme), delete (AppleScript move to Papierkorb)
+```
+Things 3 writes → SQLite WAL changes → fs.watch fires (500ms debounce)
+→ Daemon reads Things via AppleScript → diffs against local state
+→ POST /push to server → server stores in SQLite
+→ server sends WebSocket delta to other connected clients
+→ remote daemon applies: AppleScript create / URL Scheme update / AppleScript delete
+→ re-reads Things state to prevent false change detection on next sync
+```
 
-**Key v3 improvements over v2:**
-- File watcher replaces 30s polling (with 60s fallback poll)
-- WebSocket for server→client push (no client-side polling for remote changes)
-- AppleScript `make new to do` returns ID atomically (no findNewTodo retry loop)
-- Deletion via AppleScript `move to list "Papierkorb"` (v2 couldn't delete)
+**Key daemon modules:**
+- `watcher.ts` — `fs.watch` on Things WAL file, 60s fallback poll, auto-restart on WAL checkpoint
+- `ws-client.ts` — WebSocket client with exponential backoff reconnect, emits `delta` and `reconnected` events
+- `daemon.ts` — Orchestrator: connects watcher + WS + sync, 5s cooldown to avoid feedback loops, queues deltas during active sync
+- `sync.ts` — `runSync()` (full push/pull cycle) and `applyDelta()` (lightweight remote-only apply). Reconciles existing Things todos with server on first sync to prevent duplicates
+- `things.ts` — AppleScript integration. `createTodo` returns ID atomically (no polling). `deleteTodo` uses `move to list 9` (locale-independent trash). Area functions: `getTodosFromArea`, `createProjectInArea`, `createTodoInArea`
+- `state.ts` — Local state (todos, serverIdToThingsId mapping, dirty tracking), file locking, conflict history
 
-**ID mapping:** Server uses its own UUIDs (`id`), while Things has different IDs (`thingsId`). Each daemon maintains a `serverIdToThingsId` map in local state.
+**Conflict resolution:** Last-write-wins by `editedAt` timestamp, user ID as tiebreaker for equal timestamps.
 
-## Server Endpoints
+**Sync modes:** Config `syncMode` is `"project"` (single project) or `"area"` (all projects + loose todos within an area). Todos carry `projectName` metadata. Missing projects are auto-created on the remote side.
 
-- `GET /health` - No auth required
-- `GET /state` - Full project state
-- `GET /delta?since=<timestamp>` - Changes since timestamp
-- `POST /push` - Push local changes (triggers WebSocket notification to others)
-- `DELETE /reset` - Delete all user's data
-- `WS /ws` - WebSocket for real-time deltas (auth via first message)
+## Server
 
-All except `/health` require `Authorization: Bearer <api-key>` header.
+**Endpoints** (all except `/health` require `Authorization: Bearer <api-key>`):
+- `GET /health` — No auth
+- `GET /state` — Full state
+- `GET /delta?since=<timestamp>` — Changes since timestamp
+- `POST /push` — Push changes (triggers WebSocket notification to others)
+- `DELETE /reset` — Delete all user's data
+- `WS /ws` — Real-time deltas (auth via first message: `{ type: "auth", payload: { apiKey } }`)
+
+**DB schema** (`better-sqlite3`, WAL mode): `users`, `todos` (with `project_name`), `deleted_items`, `schema_version`. Migrations run automatically on startup (checks schema version, adds columns as needed).
 
 ## Data Storage
 
-- **Server:** `~/.shared-things-server/data.db` (SQLite) or `/data/data.db` (Docker)
-- **Client:** `~/.shared-things/config.json`, `~/.shared-things/state.json`
+- **Server:** `~/.shared-things-server/data.db` or `/data/data.db` (Docker volume)
+- **Client:** `~/.shared-things/config.json`, `state.json`, `conflicts.json`, `sync.log`
 - **LaunchAgent:** `~/Library/LaunchAgents/com.shared-things.daemon.plist`
 
-## Docker
+## Things 3 AppleScript Limitations
 
-```bash
-docker compose up -d                    # Start server
-docker compose exec shared-things \
-  node packages/server/dist/cli.js create-user  # Create user inside container
-```
-
-## Limitations
-
-- Things URL Scheme can update title, notes, due date, status — but not tags or position
+- URL Scheme can update title, notes, due date, status — **not** tags or position
+- `move to list 9` moves to trash (locale-independent) but cannot permanently delete
+- `to dos of area` returns only loose todos, not todos inside projects — must iterate projects separately via `area of project` comparison
 - File watcher may miss changes during WAL checkpoint (60s fallback poll handles this)
-- AppleScript move to Papierkorb works but cannot permanently delete
