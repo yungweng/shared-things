@@ -469,4 +469,143 @@ describe("Integration: 2 daemons + 1 server", () => {
 		const aTodos = daemonA.things.getTodos();
 		expect(aTodos[0].status).toBe("completed");
 	});
+
+	it("conflict: both update same todo → last write wins", async () => {
+		// A creates todo, both sync
+		daemonA.things.createTodo("TestProject", { title: "Original" });
+		await daemonA.sync();
+		await daemonB.sync();
+
+		// A updates and syncs first
+		const aTodos = daemonA.things.getTodos();
+		daemonA.things.updateTodo(aTodos[0].thingsId, { title: "A's version" });
+		await daemonA.sync();
+
+		// Ensure B's edit has a strictly newer timestamp
+		await new Promise((r) => setTimeout(r, 50));
+
+		// B updates and syncs (newer timestamp → B wins)
+		const bTodos = daemonB.things.getTodos();
+		daemonB.things.updateTodo(bTodos[0].thingsId, { title: "B's version" });
+		await daemonB.sync();
+
+		// Both sync again to converge
+		await daemonA.sync();
+		await daemonB.sync();
+
+		// Both should have B's version (last write wins)
+		const aFinal = daemonA.things.getTodos();
+		const bFinal = daemonB.things.getTodos();
+		expect(aFinal).toHaveLength(1);
+		expect(bFinal).toHaveLength(1);
+		expect(aFinal[0].title).toBe("B's version");
+		expect(bFinal[0].title).toBe("B's version");
+	});
+
+	it("conflict: edit vs delete", async () => {
+		// A creates todo, both sync
+		daemonA.things.createTodo("TestProject", { title: "Contested" });
+		await daemonA.sync();
+		await daemonB.sync();
+
+		// A deletes the todo
+		const aTodos = daemonA.things.getTodos();
+		daemonA.things.deleteTodo(aTodos[0].thingsId);
+
+		// Small delay so B's edit has a newer timestamp
+		await new Promise((r) => setTimeout(r, 10));
+
+		// B updates the todo title (newer timestamp)
+		const bTodos = daemonB.things.getTodos();
+		daemonB.things.updateTodo(bTodos[0].thingsId, { title: "B edited this" });
+
+		// A syncs first (pushes delete)
+		await daemonA.sync();
+
+		// B syncs (pushes edit with newer timestamp → edit wins over delete)
+		await daemonB.sync();
+
+		// Both sync again to converge
+		await daemonA.sync();
+		await daemonB.sync();
+
+		// The newer edit should win: todo should exist with B's title
+		const aFinal = daemonA.things.getTodos();
+		const bFinal = daemonB.things.getTodos();
+		expect(aFinal).toHaveLength(1);
+		expect(bFinal).toHaveLength(1);
+		expect(aFinal[0].title).toBe("B edited this");
+		expect(bFinal[0].title).toBe("B edited this");
+	});
+
+	it("auth: request without API key returns 401", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/state`);
+		expect(res.status).toBe(401);
+	});
+
+	it("auth: invalid API key returns 401", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/state`, {
+			headers: { Authorization: "Bearer totally-wrong-key" },
+		});
+		expect(res.status).toBe(401);
+	});
+
+	it("idempotent push: syncing twice without changes pushes nothing", async () => {
+		// A creates todo and syncs
+		daemonA.things.createTodo("TestProject", { title: "Stable" });
+		const first = await daemonA.sync();
+		expect(first.pushed).toBeGreaterThan(0);
+
+		// A syncs again with no changes → should push nothing
+		const second = await daemonA.sync();
+		expect(second.pushed).toBe(0);
+	});
+
+	it("re-sync after reset: daemon recovers gracefully", async () => {
+		// A creates 3 todos and syncs
+		daemonA.things.createTodo("TestProject", { title: "One" });
+		daemonA.things.createTodo("TestProject", { title: "Two" });
+		daemonA.things.createTodo("TestProject", { title: "Three" });
+		await daemonA.sync();
+
+		// B syncs (gets all 3)
+		await daemonB.sync();
+		expect(daemonB.things.getTodos()).toHaveLength(3);
+
+		// Reset B's state (simulates a fresh start)
+		daemonB.things = new ThingsMock();
+		daemonB.serverIdToThingsId = {};
+		daemonB.lastSyncedAt = new Date(0).toISOString();
+		(daemonB as any).lastKnownTodos = new Map();
+
+		// B syncs again from scratch → should pull all 3 from server
+		await daemonB.sync();
+		const bTodos = daemonB.things.getTodos();
+		expect(bTodos).toHaveLength(3);
+
+		const titles = bTodos.map((t) => t.title).sort();
+		expect(titles).toEqual(["One", "Three", "Two"]);
+	});
+
+	it("delete non-existent todo: no crash", async () => {
+		// Give A a fake mapping to a serverId that doesn't exist on the server
+		const fakeServerId = crypto.randomUUID();
+		const fakeThingsId = "local-only-id";
+		daemonA.serverIdToThingsId[fakeServerId] = fakeThingsId;
+		// The thingsId is not in Things mock, so sync will detect it as deleted
+		// and push a deletion for a serverId that doesn't exist on the server
+
+		// Should not throw
+		const result = await daemonA.sync();
+		expect(result.pushed).toBeGreaterThan(0);
+
+		// Daemon should still be functional after
+		daemonA.things.createTodo("TestProject", { title: "After delete" });
+		const result2 = await daemonA.sync();
+		expect(result2.pushed).toBeGreaterThan(0);
+
+		const aTodos = daemonA.things.getTodos();
+		expect(aTodos).toHaveLength(1);
+		expect(aTodos[0].title).toBe("After delete");
+	});
 });
