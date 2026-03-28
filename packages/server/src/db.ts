@@ -22,6 +22,7 @@ type DbTodoRow = {
 	tags: string;
 	status: "open" | "completed" | "canceled";
 	position: number;
+	project_name: string | null;
 	edited_at: string;
 	updated_at: string;
 	updated_by: string;
@@ -66,6 +67,7 @@ export function initDatabase(): DB {
       tags TEXT NOT NULL DEFAULT '[]',
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed', 'canceled')),
       position INTEGER NOT NULL DEFAULT 0,
+      project_name TEXT,
       edited_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       created_by TEXT NOT NULL REFERENCES users(id),
@@ -142,7 +144,7 @@ export function listUsers(
 export function getAllTodos(db: DB) {
 	const rows = db
 		.prepare(
-			`SELECT id, title, notes, due_date, tags, status, position,
+			`SELECT id, title, notes, due_date, tags, status, position, project_name,
               edited_at, updated_at FROM todos ORDER BY position`,
 		)
 		.all() as DbTodoRow[];
@@ -153,7 +155,7 @@ export function getAllTodos(db: DB) {
 export function getAllTodosWithMeta(db: DB) {
 	const rows = db
 		.prepare(
-			`SELECT id, title, notes, due_date, tags, status, position,
+			`SELECT id, title, notes, due_date, tags, status, position, project_name,
               edited_at, updated_at, updated_by FROM todos ORDER BY position`,
 		)
 		.all() as DbTodoRow[];
@@ -179,7 +181,7 @@ export function getTodosSince(db: DB, since: string) {
 export function getTodoByServerId(db: DB, serverId: string) {
 	const row = db
 		.prepare(
-			`SELECT id, title, notes, due_date, tags, status, position,
+			`SELECT id, title, notes, due_date, tags, status, position, project_name,
               edited_at, updated_at, updated_by FROM todos WHERE id = ?`,
 		)
 		.get(serverId) as DbTodoRow | undefined;
@@ -198,6 +200,7 @@ export function upsertTodo(
 		tags: string[];
 		status: "open" | "completed" | "canceled";
 		position: number;
+		projectName: string | null;
 		editedAt: string;
 	},
 	userId: string,
@@ -213,7 +216,7 @@ export function upsertTodo(
 		db.prepare(
 			`UPDATE todos
        SET title = ?, notes = ?, due_date = ?, tags = ?, status = ?,
-           position = ?, edited_at = ?, updated_at = ?, updated_by = ?
+           position = ?, project_name = ?, edited_at = ?, updated_at = ?, updated_by = ?
        WHERE id = ?`,
 		).run(
 			data.title,
@@ -222,6 +225,7 @@ export function upsertTodo(
 			tagsJson,
 			data.status,
 			data.position,
+			data.projectName,
 			data.editedAt,
 			now,
 			userId,
@@ -231,8 +235,8 @@ export function upsertTodo(
 	}
 
 	db.prepare(
-		`INSERT INTO todos (id, title, notes, due_date, tags, status, position, edited_at, updated_at, created_by, updated_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO todos (id, title, notes, due_date, tags, status, position, project_name, edited_at, updated_at, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		serverId,
 		data.title,
@@ -241,6 +245,7 @@ export function upsertTodo(
 		tagsJson,
 		data.status,
 		data.position,
+		data.projectName,
 		data.editedAt,
 		now,
 		userId,
@@ -325,6 +330,7 @@ function rowToTodo(row: DbTodoRow) {
 		tags: JSON.parse(row.tags),
 		status: row.status,
 		position: row.position,
+		projectName: row.project_name,
 		editedAt: row.edited_at,
 		updatedAt: row.updated_at,
 	};

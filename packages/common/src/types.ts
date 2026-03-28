@@ -16,6 +16,8 @@ export interface Todo {
 	status: "open" | "completed" | "canceled";
 	/** Position within project for ordering */
 	position: number;
+	/** Project name within area (null = loose todo in area root) */
+	projectName: string | null;
 	/** Client edit timestamp (ISO 8601) */
 	editedAt: string;
 	/** Server update timestamp (ISO 8601) */
@@ -60,6 +62,8 @@ export interface PushTodo {
 	tags: string[];
 	status: "open" | "completed" | "canceled";
 	position: number;
+	/** Project name within area (null = loose todo in area root) */
+	projectName: string | null;
 	editedAt: string;
 }
 
@@ -94,7 +98,12 @@ export interface Conflict {
 export interface DaemonConfig {
 	serverUrl: string;
 	apiKey: string;
-	projectName: string;
+	/** Sync mode: single project or entire area */
+	syncMode: "project" | "area";
+	/** Project name (used when syncMode = "project") */
+	projectName?: string;
+	/** Area name (used when syncMode = "area") */
+	areaName?: string;
 	thingsAuthToken: string;
 	/** Fallback poll interval if file watcher fails (seconds, default: 60) */
 	fallbackPollIntervalSeconds: number;

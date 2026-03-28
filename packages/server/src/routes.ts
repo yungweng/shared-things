@@ -177,6 +177,7 @@ export function registerRoutes(
 								tags: todo.tags,
 								status: todo.status,
 								position,
+								projectName: todo.projectName,
 								editedAt: todo.editedAt,
 							},
 							userId,
@@ -258,6 +259,7 @@ function toTodo(todo: {
 	tags: string[];
 	status: "open" | "completed" | "canceled";
 	position: number;
+	projectName: string | null;
 	editedAt: string;
 	updatedAt: string;
 }): Todo {
@@ -269,6 +271,7 @@ function toTodo(todo: {
 		tags: todo.tags,
 		status: todo.status,
 		position: todo.position,
+		projectName: todo.projectName,
 		editedAt: todo.editedAt,
 		updatedAt: todo.updatedAt,
 	};

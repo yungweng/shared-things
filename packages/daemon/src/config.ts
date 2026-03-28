@@ -26,7 +26,12 @@ export function loadConfig(): DaemonConfig | null {
 	}
 	try {
 		const content = fs.readFileSync(CONFIG_PATH, "utf-8");
-		return JSON.parse(content) as DaemonConfig;
+		const config = JSON.parse(content) as DaemonConfig;
+		// Backward compat: old configs without syncMode default to "project"
+		if (!config.syncMode) {
+			config.syncMode = "project";
+		}
+		return config;
 	} catch {
 		return null;
 	}

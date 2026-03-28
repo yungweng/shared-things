@@ -28,10 +28,22 @@ import { logError, logInfo } from "./logger.js";
 import { readConflicts, writeInitialState } from "./state.js";
 import { runSync } from "./sync.js";
 import {
+	getTodosFromArea,
 	getTodosFromProject,
 	isThingsRunning,
+	listAreas,
 	listProjects,
 } from "./things.js";
+
+/** Get the sync target name from config */
+function getSyncTarget(config: {
+	syncMode?: string;
+	projectName?: string;
+	areaName?: string;
+}): string {
+	if (config.syncMode === "area" && config.areaName) return config.areaName;
+	return config.projectName || "Unknown";
+}
 
 const program = new Command();
 
@@ -110,33 +122,65 @@ program
 			process.exit(1);
 		}
 
-		// Step 3: Select Things project
-		const projects = listProjects();
-		if (projects.length === 0) {
-			console.error(
-				chalk.red(
-					"No Things projects found. Create a project in Things first.",
-				),
-			);
-			process.exit(1);
-		}
-
-		const projectName = await select({
-			message: "Things project to sync",
-			choices: projects.map((p) => ({ name: p, value: p })),
+		// Step 3: Select sync mode and target
+		const syncMode = await select({
+			message: "What do you want to sync?",
+			choices: [
+				{ name: "A single project", value: "project" as const },
+				{
+					name: "An entire area (all projects within it)",
+					value: "area" as const,
+				},
+			],
 		});
 
-		console.log(chalk.dim("\nChecking Things project..."));
-		const todos = getTodosFromProject(projectName);
-		if (todos.length > 0) {
-			console.error(
-				chalk.red(
-					`Project "${projectName}" must be empty for first sync (found ${todos.length} todos).`,
+		let projectName: string | undefined;
+		let areaName: string | undefined;
+
+		if (syncMode === "area") {
+			const areas = listAreas();
+			if (areas.length === 0) {
+				console.error(
+					chalk.red("No Things areas found. Create an area in Things first."),
+				);
+				process.exit(1);
+			}
+			areaName = await select({
+				message: "Things area to sync",
+				choices: areas.map((a) => ({ name: a, value: a })),
+			});
+			console.log(
+				chalk.green(
+					`\nArea "${areaName}" selected. All projects within it will sync.\n`,
 				),
 			);
-			process.exit(1);
+		} else {
+			const projects = listProjects();
+			if (projects.length === 0) {
+				console.error(
+					chalk.red(
+						"No Things projects found. Create a project in Things first.",
+					),
+				);
+				process.exit(1);
+			}
+			projectName = await select({
+				message: "Things project to sync",
+				choices: projects.map((p) => ({ name: p, value: p })),
+			});
+
+			console.log(chalk.dim("\nChecking Things project..."));
+			const todos = getTodosFromProject(projectName);
+			if (todos.length > 0) {
+				console.error(
+					chalk.red(
+						`Project "${projectName}" must be empty for first sync (found ${todos.length} todos).`,
+					),
+				);
+				process.exit(1);
+			}
+			console.log(chalk.green(`Project "${projectName}" is empty.\n`));
 		}
-		console.log(chalk.green(`Project "${projectName}" is empty.\n`));
 
 		// Step 4: Things Auth Token
 		console.log("Find your Things Auth Token in:");
@@ -155,7 +199,9 @@ program
 		saveConfig({
 			serverUrl,
 			apiKey,
+			syncMode,
 			projectName,
+			areaName,
 			thingsAuthToken,
 			fallbackPollIntervalSeconds: 60,
 		});
@@ -198,6 +244,70 @@ program
 	});
 
 // =============================================================================
+// target (switch sync mode)
+// =============================================================================
+program
+	.command("target")
+	.description("Change sync target (project or area)")
+	.action(async () => {
+		if (!configExists()) {
+			console.error('Not configured. Run "shared-things init" first.');
+			process.exit(1);
+		}
+
+		const config = loadConfig()!;
+		console.log(
+			chalk.dim(
+				`\nCurrent: ${getSyncTarget(config)} (${config.syncMode || "project"})\n`,
+			),
+		);
+
+		const syncMode = await select({
+			message: "What do you want to sync?",
+			choices: [
+				{ name: "A single project", value: "project" as const },
+				{
+					name: "An entire area (all projects within it)",
+					value: "area" as const,
+				},
+			],
+		});
+
+		if (syncMode === "area") {
+			const areas = listAreas();
+			if (areas.length === 0) {
+				console.error(chalk.red("No Things areas found."));
+				return;
+			}
+			config.syncMode = "area";
+			config.areaName = await select({
+				message: "Things area to sync",
+				choices: areas.map((a) => ({ name: a, value: a })),
+			});
+		} else {
+			const projects = listProjects();
+			if (projects.length === 0) {
+				console.error(chalk.red("No Things projects found."));
+				return;
+			}
+			config.syncMode = "project";
+			config.projectName = await select({
+				message: "Things project to sync",
+				choices: projects.map((p) => ({ name: p, value: p })),
+			});
+		}
+
+		saveConfig(config);
+		writeInitialState();
+		console.log(
+			chalk.green(
+				`\nTarget changed to: ${getSyncTarget(config)} (${config.syncMode})`,
+			),
+		);
+		console.log(chalk.dim('Run "shared-things sync" or restart the daemon.\n'));
+	});
+
+// =============================================================================
 // status
 // =============================================================================
 program
@@ -225,7 +335,9 @@ program
 		console.log(
 			`  ${chalk.dim("Server:")}    ${config.serverUrl} ${serverReachable ? chalk.green("connected") : chalk.red("unreachable")}`,
 		);
-		console.log(`  ${chalk.dim("Project:")}   ${config.projectName}`);
+		console.log(
+			`  ${chalk.dim("Target:")}    ${getSyncTarget(config)} (${config.syncMode || "project"})`,
+		);
 		console.log(
 			`  ${chalk.dim("Mode:")}      event-driven (file watcher + WebSocket)`,
 		);
@@ -348,12 +460,14 @@ program
 
 		if (options.local) {
 			try {
-				const todos = getTodosFromProject(config.projectName);
+				const target = getSyncTarget(config);
+				const todos =
+					config.syncMode === "area" && config.areaName
+						? getTodosFromArea(config.areaName)
+						: getTodosFromProject(config.projectName!);
 				if (todos.length > 0) {
 					console.error(
-						chalk.red(
-							`Project "${config.projectName}" must be empty to reset local state.`,
-						),
+						chalk.red(`"${target}" must be empty to reset local state.`),
 					);
 					return;
 				}
@@ -466,12 +580,22 @@ program
 				: chalk.yellow("  Things 3: not running"),
 		);
 
-		const projects = listProjects();
-		console.log(
-			projects.includes(config.projectName)
-				? chalk.green(`  Project: ${config.projectName}`)
-				: chalk.red(`  Project: "${config.projectName}" not found`),
-		);
+		const target = getSyncTarget(config);
+		if (config.syncMode === "area") {
+			const areas = listAreas();
+			console.log(
+				areas.includes(target)
+					? chalk.green(`  Area: ${target}`)
+					: chalk.red(`  Area: "${target}" not found`),
+			);
+		} else {
+			const projects = listProjects();
+			console.log(
+				projects.includes(target)
+					? chalk.green(`  Project: ${target}`)
+					: chalk.red(`  Project: "${target}" not found`),
+			);
+		}
 
 		const api = new ApiClient(config.serverUrl, config.apiKey);
 		try {

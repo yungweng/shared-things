@@ -8,7 +8,12 @@
  */
 
 import { execSync } from "node:child_process";
-import type { PushResponse, SyncDelta, Todo } from "@shared-things/common";
+import type {
+	DaemonConfig,
+	PushResponse,
+	SyncDelta,
+	Todo,
+} from "@shared-things/common";
 import { ApiClient } from "./api.js";
 import { loadConfig } from "./config.js";
 import { logDebug, logError, logInfo, logWarn } from "./logger.js";
@@ -25,12 +30,32 @@ import {
 	setMapping,
 } from "./state.js";
 import {
+	createProjectInArea,
 	createTodo,
+	createTodoInArea,
 	deleteTodo,
+	getProjectsInArea,
+	getTodosFromArea,
 	getTodosFromProject,
 	type ThingsTodo,
 	updateTodo,
 } from "./things.js";
+
+/** Read all todos based on config sync mode */
+function readCurrentTodos(config: DaemonConfig): ThingsTodo[] {
+	if (config.syncMode === "area" && config.areaName) {
+		return getTodosFromArea(config.areaName);
+	}
+	return getTodosFromProject(config.projectName!);
+}
+
+/** Get the sync target name for logging */
+function getSyncTargetName(config: DaemonConfig): string {
+	if (config.syncMode === "area" && config.areaName) {
+		return config.areaName;
+	}
+	return config.projectName!;
+}
 
 export async function runSync(): Promise<{
 	pushed: number;
@@ -74,7 +99,7 @@ export async function runSync(): Promise<{
 
 	try {
 		// 1. Read current Things state
-		const currentTodos = getTodosFromProject(config.projectName);
+		const currentTodos = readCurrentTodos(config);
 		const positionMap = new Map(
 			currentTodos.map((todo, idx) => [todo.thingsId, idx]),
 		);
@@ -97,6 +122,7 @@ export async function runSync(): Promise<{
 					tags: todo.tags,
 					status: todo.status,
 					position,
+					projectName: todo.projectName,
 					editedAt: now,
 				};
 				dirtyUpserted.add(thingsId);
@@ -148,6 +174,7 @@ export async function runSync(): Promise<{
 					tags: stored.tags,
 					status: stored.status,
 					position: stored.position,
+					projectName: stored.projectName,
 					editedAt: stored.editedAt,
 				};
 			})
@@ -185,8 +212,7 @@ export async function runSync(): Promise<{
 		// 5. Pull from server
 		const delta = await getServerDelta(api, localState, currentTodos);
 		const remoteResult = applyRemoteChanges(
-			config.thingsAuthToken,
-			config.projectName,
+			config,
 			delta.todos.upserted,
 			delta.todos.deleted,
 			currentTodosMap,
@@ -236,12 +262,11 @@ export function applyDelta(delta: SyncDelta): void {
 
 	try {
 		const localState = loadLocalState();
-		const currentTodos = getTodosFromProject(config.projectName);
+		const currentTodos = readCurrentTodos(config);
 		const currentTodosMap = new Map(currentTodos.map((t) => [t.thingsId, t]));
 
 		const result = applyRemoteChanges(
-			config.thingsAuthToken,
-			config.projectName,
+			config,
 			delta.todos.upserted,
 			delta.todos.deleted,
 			currentTodosMap,
@@ -343,8 +368,7 @@ async function getServerDelta(
  * Apply remote changes to Things (v3: supports actual deletion!)
  */
 function applyRemoteChanges(
-	authToken: string,
-	projectName: string,
+	config: DaemonConfig,
 	upserted: Todo[],
 	deleted: { serverId: string; deletedAt: string }[],
 	currentTodosMap: Map<string, ThingsTodo>,
@@ -352,6 +376,13 @@ function applyRemoteChanges(
 ): { applied: number; conflicts: ConflictEntry[] } {
 	let applied = 0;
 	const conflicts: ConflictEntry[] = [];
+	const authToken = config.thingsAuthToken;
+
+	// Track known local projects (for area mode — create missing projects on demand)
+	let knownProjects: Set<string> | null = null;
+	if (config.syncMode === "area" && config.areaName) {
+		knownProjects = new Set(getProjectsInArea(config.areaName));
+	}
 
 	for (const remoteTodo of upserted) {
 		const localThingsId = state.serverIdToThingsId[remoteTodo.id];
@@ -363,14 +394,44 @@ function applyRemoteChanges(
 			: undefined;
 
 		if (!localTodo || !localThingsId) {
-			// Create new todo via AppleScript (returns ID atomically)
 			try {
-				const newThingsId = createTodo(projectName, {
-					title: remoteTodo.title,
-					notes: remoteTodo.notes,
-					dueDate: remoteTodo.dueDate || undefined,
-					tags: remoteTodo.tags,
-				});
+				let newThingsId: string;
+
+				if (
+					config.syncMode === "area" &&
+					config.areaName &&
+					!remoteTodo.projectName
+				) {
+					// Loose todo in area
+					newThingsId = createTodoInArea(config.areaName, {
+						title: remoteTodo.title,
+						notes: remoteTodo.notes,
+						dueDate: remoteTodo.dueDate || undefined,
+						tags: remoteTodo.tags,
+					});
+				} else {
+					// Todo in a project
+					const targetProject = remoteTodo.projectName || config.projectName!;
+
+					// In area mode, ensure the project exists
+					if (
+						config.syncMode === "area" &&
+						config.areaName &&
+						knownProjects &&
+						!knownProjects.has(targetProject)
+					) {
+						createProjectInArea(targetProject, config.areaName);
+						knownProjects.add(targetProject);
+						logInfo(`Created project: "${targetProject}"`);
+					}
+
+					newThingsId = createTodo(targetProject, {
+						title: remoteTodo.title,
+						notes: remoteTodo.notes,
+						dueDate: remoteTodo.dueDate || undefined,
+						tags: remoteTodo.tags,
+					});
+				}
 
 				setMapping(state, remoteTodo.id, newThingsId);
 				state.todos[newThingsId] = {
@@ -381,10 +442,10 @@ function applyRemoteChanges(
 					tags: remoteTodo.tags,
 					status: remoteTodo.status,
 					position: remoteTodo.position,
+					projectName: remoteTodo.projectName,
 					editedAt: remoteTodo.editedAt,
 				};
 
-				// Set status if not open
 				if (remoteTodo.status !== "open") {
 					try {
 						updateTodo(authToken, newThingsId, {
@@ -426,6 +487,7 @@ function applyRemoteChanges(
 				tags: remoteTodo.tags,
 				status: remoteTodo.status,
 				position: remoteTodo.position,
+				projectName: remoteTodo.projectName,
 				editedAt: remoteTodo.editedAt,
 			};
 

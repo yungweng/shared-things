@@ -19,6 +19,7 @@ export interface LocalTodoState {
 	tags: string[];
 	status: "open" | "completed" | "canceled";
 	position: number;
+	projectName: string | null;
 	editedAt: string;
 }
 
@@ -101,7 +102,7 @@ export function loadLocalState(): LocalState {
 		}
 	}
 
-	// Ensure todos have valid fields
+	// Ensure todos have valid fields (+ migrate from pre-area state)
 	for (const [thingsId, todo] of Object.entries(todos)) {
 		if (!todo.editedAt) {
 			todos[thingsId] = {
@@ -115,6 +116,7 @@ export function loadLocalState(): LocalState {
 					typeof todo.position === "number" && Number.isFinite(todo.position)
 						? todo.position
 						: 0,
+				projectName: todo.projectName ?? null,
 				editedAt: lastSyncedAt,
 			};
 		}

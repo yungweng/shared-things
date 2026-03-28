@@ -15,6 +15,8 @@ export interface ThingsTodo {
 	dueDate: string | null;
 	tags: string[];
 	status: "open" | "completed" | "canceled";
+	/** Project name within area (null = loose todo) */
+	projectName: string | null;
 }
 
 const PIPE_TOKEN = "{{PIPE}}";
@@ -101,6 +103,7 @@ export function getTodosFromProject(projectName: string): ThingsTodo[] {
 				? unescapeField(tags).split(", ").filter(Boolean)
 				: [],
 			status: (status as ThingsTodo["status"]) || "open",
+			projectName,
 		};
 	});
 }
@@ -257,4 +260,198 @@ export function listProjects(): string[] {
 
 	if (!result) return [];
 	return result.split("|||").filter(Boolean);
+}
+
+// =============================================================================
+// Area support
+// =============================================================================
+
+export function listAreas(): string[] {
+	const result = runAppleScript(`
+    tell application "Things3"
+      set areaNames to {}
+      repeat with a in areas
+        set end of areaNames to name of a
+      end repeat
+      set AppleScript's text item delimiters to "|||"
+      return areaNames as string
+    end tell
+  `);
+
+	if (!result) return [];
+	return result.split("|||").filter(Boolean);
+}
+
+/**
+ * Get ALL todos from an area — loose todos + todos in projects within the area.
+ * Each todo carries its projectName (null for loose todos).
+ */
+export function getTodosFromArea(areaName: string): ThingsTodo[] {
+	// First get loose todos directly in the area
+	const looseTodos = getTodosFromAreaLoose(areaName);
+
+	// Then get todos from each project within the area
+	const projectNames = getProjectsInArea(areaName);
+	const projectTodos: ThingsTodo[] = [];
+	for (const projName of projectNames) {
+		const todos = getTodosFromProject(projName);
+		projectTodos.push(...todos);
+	}
+
+	return [...looseTodos, ...projectTodos];
+}
+
+function getTodosFromAreaLoose(areaName: string): ThingsTodo[] {
+	const script = `
+    on replaceText(findText, replaceText, theText)
+      set AppleScript's text item delimiters to findText
+      set theItems to every text item of theText
+      set AppleScript's text item delimiters to replaceText
+      set theText to theItems as string
+      set AppleScript's text item delimiters to ""
+      return theText
+    end replaceText
+
+    on escapeText(t)
+      if t is missing value then return ""
+      set t to my replaceText("|||", "${PIPE_TOKEN}", t as string)
+      set t to my replaceText("^^^", "${CARET_TOKEN}", t as string)
+      return t
+    end escapeText
+
+    tell application "Things3"
+      set todoList to {}
+      set theArea to area "${areaName}"
+      repeat with t in to dos of theArea
+        -- Skip todos that belong to a project (we handle those separately)
+        try
+          set projRef to project of t
+          if projRef is not missing value then
+          else
+            error "no project"
+          end if
+        on error
+          set todoId to id of t
+          set todoTitle to my escapeText(name of t)
+          set todoNotes to my escapeText(notes of t)
+          set todoStatus to status of t
+          set todoDue to due date of t
+          set AppleScript's text item delimiters to ", "
+          set todoTags to my escapeText((tag names of t) as string)
+          set AppleScript's text item delimiters to ""
+
+          set dueDateStr to ""
+          if todoDue is not missing value then
+            set dueDateStr to (year of todoDue as string) & "-" & ¬
+              (text -2 thru -1 of ("0" & (month of todoDue as integer) as string)) & "-" & ¬
+              (text -2 thru -1 of ("0" & (day of todoDue) as string))
+          end if
+
+          set statusStr to "open"
+          if todoStatus is completed then
+            set statusStr to "completed"
+          else if todoStatus is canceled then
+            set statusStr to "canceled"
+          end if
+
+          set end of todoList to todoId & "|||" & todoTitle & "|||" & todoNotes & "|||" & dueDateStr & "|||" & todoTags & "|||" & statusStr
+        end try
+      end repeat
+
+      set AppleScript's text item delimiters to "^^^"
+      return todoList as string
+    end tell
+  `;
+
+	const result = runAppleScript(script);
+	if (!result) return [];
+
+	return result.split("^^^").map((line) => {
+		const [thingsId, title, notes, dueDate, tags, status] = line.split("|||");
+		return {
+			thingsId,
+			title: unescapeField(title) || "",
+			notes: unescapeField(notes) || "",
+			dueDate: dueDate || null,
+			tags: unescapeField(tags)
+				? unescapeField(tags).split(", ").filter(Boolean)
+				: [],
+			status: (status as ThingsTodo["status"]) || "open",
+			projectName: null,
+		};
+	});
+}
+
+export function getProjectsInArea(areaName: string): string[] {
+	const result = runAppleScript(`
+    tell application "Things3"
+      set projNames to {}
+      set theArea to area "${areaName}"
+      repeat with p in projects
+        try
+          if area of p is theArea then
+            set end of projNames to name of p
+          end if
+        end try
+      end repeat
+      set AppleScript's text item delimiters to "|||"
+      return projNames as string
+    end tell
+  `);
+
+	if (!result) return [];
+	return result.split("|||").filter(Boolean);
+}
+
+/**
+ * Create a project inside an area. Returns the project name.
+ */
+export function createProjectInArea(
+	projectName: string,
+	areaName: string,
+): void {
+	const escName = projectName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+	runAppleScript(`
+    tell application "Things3"
+      set newProj to make new project with properties {name:"${escName}"}
+      set area of newProj to area "${areaName}"
+    end tell
+  `);
+}
+
+/**
+ * Create a todo as a loose item in an area (not in any project).
+ */
+export function createTodoInArea(
+	areaName: string,
+	todo: {
+		title: string;
+		notes?: string;
+		dueDate?: string;
+		tags?: string[];
+	},
+): string {
+	const escTitle = todo.title.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+	const escNotes = (todo.notes || "")
+		.replace(/\\/g, "\\\\")
+		.replace(/"/g, '\\"');
+
+	let props = `name:"${escTitle}", notes:"${escNotes}"`;
+
+	if (todo.tags?.length) {
+		const escTags = todo.tags
+			.map((t) => t.replace(/\\/g, "\\\\").replace(/"/g, '\\"'))
+			.join(",");
+		props += `, tag names:"${escTags}"`;
+	}
+
+	const script = `
+    tell application "Things3"
+      set theArea to area "${areaName}"
+      set newTodo to make new to do with properties {${props}} at beginning of theArea
+      return id of newTodo
+    end tell
+  `;
+
+	return runAppleScript(script);
 }
