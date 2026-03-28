@@ -8,3 +8,4 @@ dist/
 .DS_Store
 *.tgz
 DEPLOY.md
+packages/daemon/bin/
