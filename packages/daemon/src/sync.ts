@@ -49,14 +49,6 @@ function readCurrentTodos(config: DaemonConfig): ThingsTodo[] {
 	return getTodosFromProject(config.projectName!);
 }
 
-/** Get the sync target name for logging */
-function getSyncTargetName(config: DaemonConfig): string {
-	if (config.syncMode === "area" && config.areaName) {
-		return config.areaName;
-	}
-	return config.projectName!;
-}
-
 export async function runSync(): Promise<{
 	pushed: number;
 	pulled: number;
@@ -104,6 +96,37 @@ export async function runSync(): Promise<{
 			currentTodos.map((todo, idx) => [todo.thingsId, idx]),
 		);
 		const currentTodosMap = new Map(currentTodos.map((t) => [t.thingsId, t]));
+
+		// 1b. If state was reset but Things still has todos, reconcile by matching
+		//     existing Things todos against server state before detecting changes.
+		//     This prevents re-pushing existing todos as new (causing duplicates).
+		if (isFirstSync && currentTodos.length > 0) {
+			logInfo(
+				`Reconciling ${currentTodos.length} existing Things todos with server state`,
+			);
+			const serverState = await api.getState();
+			const serverTodosByTitle = new Map<string, Todo>();
+			for (const st of serverState.todos) {
+				// Use first unmatched server todo per title
+				if (!serverTodosByTitle.has(st.title)) {
+					serverTodosByTitle.set(st.title, st);
+				}
+			}
+
+			const matchedServerIds = new Set<string>();
+			for (const thingsTodo of currentTodos) {
+				const match = serverTodosByTitle.get(thingsTodo.title);
+				if (match && !matchedServerIds.has(match.id)) {
+					setMapping(localState, match.id, thingsTodo.thingsId);
+					matchedServerIds.add(match.id);
+					logDebug(`Reconciled "${thingsTodo.title}" -> server ${match.id}`);
+				}
+			}
+
+			logInfo(
+				`Reconciled ${matchedServerIds.size}/${currentTodos.length} todos with server`,
+			);
+		}
 
 		// 2. Detect local changes
 		const now = new Date().toISOString();
@@ -210,7 +233,7 @@ export async function runSync(): Promise<{
 		}
 
 		// 5. Pull from server
-		const delta = await getServerDelta(api, localState, currentTodos);
+		const delta = await getServerDelta(api, localState);
 		const remoteResult = applyRemoteChanges(
 			config,
 			delta.todos.upserted,
@@ -343,15 +366,12 @@ function conflictsFromPush(response: PushResponse): ConflictEntry[] {
 	}));
 }
 
-async function getServerDelta(
-	api: ApiClient,
-	state: LocalState,
-	currentTodos: ThingsTodo[],
-) {
-	const shouldBootstrap =
-		Object.keys(state.todos).length === 0 &&
-		Object.keys(state.serverIdToThingsId).length === 0 &&
-		currentTodos.length === 0;
+async function getServerDelta(api: ApiClient, state: LocalState) {
+	// Bootstrap (full state fetch) when local state has no mappings, regardless
+	// of whether Things already has todos.  The reconciliation step in runSync
+	// will have pre-populated mappings for any matched todos, so the pull phase
+	// will correctly update rather than duplicate.
+	const shouldBootstrap = Object.keys(state.serverIdToThingsId).length === 0;
 
 	if (shouldBootstrap) {
 		const fullState = await api.getState();
