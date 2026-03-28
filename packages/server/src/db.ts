@@ -47,8 +47,21 @@ export function initDatabase(): DB {
 		| { version: number }
 		| undefined;
 
+	const currentVersion = versionRow?.version ?? 0;
+
 	if (!versionRow) {
-		db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(3);
+		db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(4);
+	}
+
+	// Migration: add project_name column (v3 → v4)
+	if (currentVersion < 4) {
+		const cols = db.prepare("PRAGMA table_info(todos)").all() as {
+			name: string;
+		}[];
+		if (!cols.some((c) => c.name === "project_name")) {
+			db.exec("ALTER TABLE todos ADD COLUMN project_name TEXT");
+		}
+		db.prepare("UPDATE schema_version SET version = ?").run(4);
 	}
 
 	db.exec(`
