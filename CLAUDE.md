@@ -23,6 +23,10 @@ pnpm lint              # Check
 pnpm lint:fix          # Auto-fix
 pnpm typecheck         # TypeScript strict check
 
+# Tests (integration tests with mocked Things, real server)
+pnpm test                                    # Run all tests
+pnpm --filter shared-things-server test      # Server tests only
+
 # Run server locally
 node packages/server/dist/cli.js start --port 3334
 
@@ -83,6 +87,10 @@ Things 3 writes → SQLite WAL changes → fs.watch fires (500ms debounce)
 - **Server:** `~/.shared-things-server/data.db` or `/data/data.db` (Docker volume)
 - **Client:** `~/.shared-things/config.json`, `state.json`, `conflicts.json`, `sync.log`
 - **LaunchAgent:** `~/Library/LaunchAgents/com.shared-things.daemon.plist`
+
+## Testing
+
+Integration tests in `packages/server/src/__tests__/integration.test.ts` use a real Fastify+SQLite server with two `SimulatedDaemon` instances (in-memory `ThingsMock` instead of AppleScript). Tests cover: create/update/delete sync, conflict resolution (last-write-wins), auth, idempotency, state recovery, and edge cases. No macOS or Things 3 required — runs in any CI.
 
 ## Things 3 AppleScript Limitations
 
