@@ -129,23 +129,14 @@ program
 		console.log(chalk.dim("\nChecking Things project..."));
 		const todos = getTodosFromProject(projectName);
 		if (todos.length > 0) {
-			console.log(
-				chalk.yellow(
-					`Project "${projectName}" has ${todos.length} existing todos.`,
+			console.error(
+				chalk.red(
+					`Project "${projectName}" must be empty for first sync (found ${todos.length} todos).`,
 				),
 			);
-			const proceed = await confirm({
-				message: "Continue anyway? Existing todos will be synced to the server.",
-				default: true,
-			});
-			if (!proceed) {
-				console.log(chalk.dim("Cancelled."));
-				return;
-			}
-		} else {
-			console.log(chalk.green(`Project "${projectName}" is empty.`));
+			process.exit(1);
 		}
-		console.log();
+		console.log(chalk.green(`Project "${projectName}" is empty.\n`));
 
 		// Step 4: Things Auth Token
 		console.log("Find your Things Auth Token in:");
