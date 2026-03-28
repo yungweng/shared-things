@@ -53,23 +53,129 @@ program
 	.version("3.0.0");
 
 // =============================================================================
-// init
+// init (also handles target change and reconfiguration)
 // =============================================================================
+
+/** Shared sync target selection (used by init for both fresh setup and target change) */
+async function selectSyncTarget(): Promise<{
+	syncMode: "project" | "area";
+	projectName?: string;
+	areaName?: string;
+}> {
+	const syncMode = await select({
+		message: "What do you want to sync?",
+		choices: [
+			{ name: "A single project", value: "project" as const },
+			{
+				name: "An entire area (all projects within it)",
+				value: "area" as const,
+			},
+		],
+	});
+
+	let projectName: string | undefined;
+	let areaName: string | undefined;
+
+	if (syncMode === "area") {
+		const areas = listAreas();
+		if (areas.length === 0) {
+			console.error(
+				chalk.red("No Things areas found. Create an area in Things first."),
+			);
+			process.exit(1);
+		}
+		areaName = await select({
+			message: "Things area to sync",
+			choices: areas.map((a) => ({ name: a, value: a })),
+		});
+		console.log(
+			chalk.green(
+				`\nArea "${areaName}" selected. All projects within it will sync.\n`,
+			),
+		);
+	} else {
+		const projects = listProjects();
+		if (projects.length === 0) {
+			console.error(
+				chalk.red(
+					"No Things projects found. Create a project in Things first.",
+				),
+			);
+			process.exit(1);
+		}
+		projectName = await select({
+			message: "Things project to sync",
+			choices: projects.map((p) => ({ name: p, value: p })),
+		});
+
+		console.log(chalk.dim("\nChecking Things project..."));
+		const todos = getTodosFromProject(projectName);
+		if (todos.length > 0) {
+			console.error(
+				chalk.red(
+					`Project "${projectName}" must be empty for first sync (found ${todos.length} todos).`,
+				),
+			);
+			process.exit(1);
+		}
+		console.log(chalk.green(`Project "${projectName}" is empty.\n`));
+	}
+
+	return { syncMode, projectName, areaName };
+}
+
 program
 	.command("init")
-	.description("Setup wizard")
+	.description("Setup wizard (or reconfigure existing setup)")
 	.action(async () => {
 		console.log(chalk.bold("\nshared-things Setup\n"));
 
+		// If already configured, offer targeted reconfiguration
 		if (configExists()) {
-			const overwrite = await confirm({
-				message: "Configuration already exists. Overwrite?",
-				default: false,
+			const config = loadConfig()!;
+			const action = await select({
+				message: `Already configured (${getSyncTarget(config)}). What would you like to do?`,
+				choices: [
+					{ name: "Change sync target", value: "target" as const },
+					{ name: "Full reconfiguration", value: "full" as const },
+					{ name: "Cancel", value: "cancel" as const },
+				],
 			});
-			if (!overwrite) {
+
+			if (action === "cancel") {
 				console.log(chalk.dim("Cancelled."));
 				return;
 			}
+
+			if (action === "target") {
+				console.log(
+					chalk.dim(
+						`\nCurrent: ${getSyncTarget(config)} (${config.syncMode || "project"})\n`,
+					),
+				);
+				const { syncMode, projectName, areaName } = await selectSyncTarget();
+				config.syncMode = syncMode;
+				if (syncMode === "area") {
+					config.areaName = areaName;
+				} else {
+					config.projectName = projectName;
+				}
+				saveConfig(config);
+				writeInitialState();
+				console.log(
+					chalk.green(
+						`\nTarget changed to: ${getSyncTarget(config)} (${config.syncMode})`,
+					),
+				);
+				console.log(
+					chalk.dim(
+						'Run "shared-things sync" or restart the daemon.\n',
+					),
+				);
+				return;
+			}
+
+			// Full reconfiguration
 			const statePath = path.join(getConfigDir(), "state.json");
 			if (fs.existsSync(statePath)) {
 				fs.unlinkSync(statePath);
@@ -123,64 +229,7 @@ program
 		}
 
 		// Step 3: Select sync mode and target
-		const syncMode = await select({
-			message: "What do you want to sync?",
-			choices: [
-				{ name: "A single project", value: "project" as const },
-				{
-					name: "An entire area (all projects within it)",
-					value: "area" as const,
-				},
-			],
-		});
-
-		let projectName: string | undefined;
-		let areaName: string | undefined;
-
-		if (syncMode === "area") {
-			const areas = listAreas();
-			if (areas.length === 0) {
-				console.error(
-					chalk.red("No Things areas found. Create an area in Things first."),
-				);
-				process.exit(1);
-			}
-			areaName = await select({
-				message: "Things area to sync",
-				choices: areas.map((a) => ({ name: a, value: a })),
-			});
-			console.log(
-				chalk.green(
-					`\nArea "${areaName}" selected. All projects within it will sync.\n`,
-				),
-			);
-		} else {
-			const projects = listProjects();
-			if (projects.length === 0) {
-				console.error(
-					chalk.red(
-						"No Things projects found. Create a project in Things first.",
-					),
-				);
-				process.exit(1);
-			}
-			projectName = await select({
-				message: "Things project to sync",
-				choices: projects.map((p) => ({ name: p, value: p })),
-			});
-
-			console.log(chalk.dim("\nChecking Things project..."));
-			const todos = getTodosFromProject(projectName);
-			if (todos.length > 0) {
-				console.error(
-					chalk.red(
-						`Project "${projectName}" must be empty for first sync (found ${todos.length} todos).`,
-					),
-				);
-				process.exit(1);
-			}
-			console.log(chalk.green(`Project "${projectName}" is empty.\n`));
-		}
+		const { syncMode, projectName, areaName } = await selectSyncTarget();
 
 		// Step 4: Things Auth Token
 		console.log("Find your Things Auth Token in:");
@@ -244,76 +293,15 @@ program
 	});
 
 // =============================================================================
-// target (switch sync mode)
-// =============================================================================
-program
-	.command("target")
-	.description("Change sync target (project or area)")
-	.action(async () => {
-		if (!configExists()) {
-			console.error('Not configured. Run "shared-things init" first.');
-			process.exit(1);
-		}
-
-		const config = loadConfig()!;
-		console.log(
-			chalk.dim(
-				`\nCurrent: ${getSyncTarget(config)} (${config.syncMode || "project"})\n`,
-			),
-		);
-
-		const syncMode = await select({
-			message: "What do you want to sync?",
-			choices: [
-				{ name: "A single project", value: "project" as const },
-				{
-					name: "An entire area (all projects within it)",
-					value: "area" as const,
-				},
-			],
-		});
-
-		if (syncMode === "area") {
-			const areas = listAreas();
-			if (areas.length === 0) {
-				console.error(chalk.red("No Things areas found."));
-				return;
-			}
-			config.syncMode = "area";
-			config.areaName = await select({
-				message: "Things area to sync",
-				choices: areas.map((a) => ({ name: a, value: a })),
-			});
-		} else {
-			const projects = listProjects();
-			if (projects.length === 0) {
-				console.error(chalk.red("No Things projects found."));
-				return;
-			}
-			config.syncMode = "project";
-			config.projectName = await select({
-				message: "Things project to sync",
-				choices: projects.map((p) => ({ name: p, value: p })),
-			});
-		}
-
-		saveConfig(config);
-		writeInitialState();
-		console.log(
-			chalk.green(
-				`\nTarget changed to: ${getSyncTarget(config)} (${config.syncMode})`,
-			),
-		);
-		console.log(chalk.dim('Run "shared-things sync" or restart the daemon.\n'));
-	});
-
-// =============================================================================
-// status
+// status (includes doctor + conflicts)
 // =============================================================================
 program
 	.command("status")
 	.description("Show sync status")
-	.action(async () => {
+	.option("--doctor", "Run comprehensive health checks")
+	.option("--conflicts", "Show recent conflict history")
+	.option("--all", "Show all conflicts (use with --conflicts)")
+	.action(async (options) => {
 		if (!configExists()) {
 			console.log(chalk.yellow("Not configured."));
 			console.log(chalk.dim('Run "shared-things init" to get started.'));
@@ -361,6 +349,74 @@ program
 				`  ${chalk.dim("Conflicts:")} ${chalk.yellow(String(conflicts.length))}`,
 			);
 		}
+
+		// Doctor: deep health checks
+		if (options.doctor) {
+			console.log(chalk.bold("\n  Health Check\n"));
+
+			console.log(
+				`  ${chalk.dim("Config:")}    ${chalk.green("ok")}`,
+			);
+
+			console.log(
+				fs.existsSync(statePath)
+					? `  ${chalk.dim("State:")}     ${chalk.green("ok")}`
+					: `  ${chalk.dim("State:")}     ${chalk.red("missing")}`,
+			);
+
+			console.log(
+				isThingsRunning()
+					? `  ${chalk.dim("Things 3:")}  ${chalk.green("running")}`
+					: `  ${chalk.dim("Things 3:")}  ${chalk.yellow("not running")}`,
+			);
+
+			const target = getSyncTarget(config);
+			if (config.syncMode === "area") {
+				const areas = listAreas();
+				console.log(
+					areas.includes(target)
+						? `  ${chalk.dim("Area:")}      ${chalk.green(target)}`
+						: `  ${chalk.dim("Area:")}      ${chalk.red(`"${target}" not found`)}`,
+				);
+			} else {
+				const projects = listProjects();
+				console.log(
+					projects.includes(target)
+						? `  ${chalk.dim("Project:")}   ${chalk.green(target)}`
+						: `  ${chalk.dim("Project:")}   ${chalk.red(`"${target}" not found`)}`,
+				);
+			}
+		}
+
+		// Conflicts: detailed conflict history
+		if (options.conflicts) {
+			if (conflicts.length === 0) {
+				console.log(chalk.dim("\n  No conflicts recorded."));
+			} else {
+				const shown = options.all ? conflicts : conflicts.slice(-10);
+				console.log(
+					chalk.bold(`\n  Conflicts (${shown.length}${!options.all && conflicts.length > 10 ? ` of ${conflicts.length}` : ""})\n`),
+				);
+				for (const c of shown) {
+					console.log(
+						`  ${chalk.dim(c.timestamp)} ${chalk.white(c.title)} (${c.serverId})`,
+					);
+					console.log(`    ${chalk.dim("Reason:")} ${c.reason}`);
+					if (c.yourVersion.editedAt || c.yourVersion.deletedAt) {
+						console.log(
+							`    ${chalk.dim("Yours:")} ${c.yourVersion.deletedAt ? `deleted at ${c.yourVersion.deletedAt}` : `edited at ${c.yourVersion.editedAt}`}`,
+						);
+					}
+					if (c.winningVersion.editedAt || c.winningVersion.deletedAt) {
+						console.log(
+							`    ${chalk.dim("Winner:")} ${c.winningVersion.deletedAt ? `deleted at ${c.winningVersion.deletedAt}` : `edited at ${c.winningVersion.editedAt}`}`,
+						);
+					}
+					console.log();
+				}
+			}
+		}
+
 		console.log();
 	});
 
@@ -399,7 +455,7 @@ program
 // daemon (internal, run by launchd)
 // =============================================================================
 program
-	.command("daemon")
+	.command("daemon", { hidden: true })
 	.description("Run sync daemon (used by launchd)")
 	.action(async () => {
 		if (!configExists()) {
@@ -477,11 +533,25 @@ program
 			}
 		}
 
+		const parts = [
+			options.local && "local state",
+			options.server && "server data",
+		].filter(Boolean);
+		const scope = parts.join(" and ");
+
 		const confirmed = await confirm({
-			message: "This cannot be undone. Continue?",
+			message: `This will permanently delete ${scope}. Continue?`,
 			default: false,
 		});
 		if (!confirmed) {
+			console.log(chalk.dim("Cancelled."));
+			return;
+		}
+
+		const typed = await input({
+			message: `Type "reset" to confirm:`,
+		});
+		if (typed !== "reset") {
 			console.log(chalk.dim("Cancelled."));
 			return;
 		}
@@ -515,99 +585,6 @@ program
 		);
 	});
 
-// =============================================================================
-// conflicts
-// =============================================================================
-program
-	.command("conflicts")
-	.description("Show conflict history")
-	.option("--all", "Show all conflicts")
-	.action((options) => {
-		const conflicts = readConflicts();
-		if (conflicts.length === 0) {
-			console.log("No conflicts recorded.");
-			return;
-		}
-
-		const shown = options.all ? conflicts : conflicts.slice(-10);
-		console.log(chalk.bold(`\nConflicts (${shown.length})\n`));
-		for (const c of shown) {
-			console.log(
-				`${chalk.dim(c.timestamp)} ${chalk.white(c.title)} (${c.serverId})`,
-			);
-			console.log(`  ${chalk.dim("Reason:")} ${c.reason}`);
-			if (c.yourVersion.editedAt || c.yourVersion.deletedAt) {
-				console.log(
-					`  ${chalk.dim("Yours:")} ${c.yourVersion.deletedAt ? `deleted at ${c.yourVersion.deletedAt}` : `edited at ${c.yourVersion.editedAt}`}`,
-				);
-			}
-			if (c.winningVersion.editedAt || c.winningVersion.deletedAt) {
-				console.log(
-					`  ${chalk.dim("Winner:")} ${c.winningVersion.deletedAt ? `deleted at ${c.winningVersion.deletedAt}` : `edited at ${c.winningVersion.editedAt}`}`,
-				);
-			}
-			console.log();
-		}
-	});
-
-// =============================================================================
-// doctor
-// =============================================================================
-program
-	.command("doctor")
-	.description("Comprehensive health check")
-	.action(async () => {
-		console.log(chalk.bold("\nshared-things Doctor\n"));
-
-		if (!configExists()) {
-			console.log(chalk.red("  Config: missing (run init)"));
-			return;
-		}
-
-		const config = loadConfig()!;
-		console.log(chalk.green("  Config: ok"));
-
-		const statePath = path.join(getConfigDir(), "state.json");
-		console.log(
-			fs.existsSync(statePath)
-				? chalk.green("  State: ok")
-				: chalk.red("  State: missing"),
-		);
-
-		console.log(
-			isThingsRunning()
-				? chalk.green("  Things 3: running")
-				: chalk.yellow("  Things 3: not running"),
-		);
-
-		const target = getSyncTarget(config);
-		if (config.syncMode === "area") {
-			const areas = listAreas();
-			console.log(
-				areas.includes(target)
-					? chalk.green(`  Area: ${target}`)
-					: chalk.red(`  Area: "${target}" not found`),
-			);
-		} else {
-			const projects = listProjects();
-			console.log(
-				projects.includes(target)
-					? chalk.green(`  Project: ${target}`)
-					: chalk.red(`  Project: "${target}" not found`),
-			);
-		}
-
-		const api = new ApiClient(config.serverUrl, config.apiKey);
-		try {
-			await api.health();
-			console.log(chalk.green("  Server: reachable"));
-		} catch {
-			console.log(chalk.red("  Server: unreachable"));
-		}
-
-		console.log(chalk.green(`  Daemon: ${getLaunchAgentStatus()}`));
-		console.log();
-	});
 
 // =============================================================================
 // update
@@ -733,4 +710,10 @@ function formatTimeAgo(date: Date): string {
 	return `${days}d ago`;
 }
 
-program.parse();
+program.parseAsync().catch((error) => {
+	if (error.name === "ExitPromptError") {
+		process.exit(0);
+	}
+	console.error(chalk.red(error.message || error));
+	process.exit(1);
+});

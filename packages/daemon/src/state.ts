@@ -46,7 +46,7 @@ export interface ConflictEntry {
 
 export function loadLocalState(): LocalState {
 	if (!fs.existsSync(STATE_FILE)) {
-		throw new Error('State file missing. Run "shared-things init" first.');
+		writeInitialState();
 	}
 
 	ensureConfigDir();
