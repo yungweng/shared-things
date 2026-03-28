@@ -139,6 +139,7 @@ Create a todo in the shared Things project — it should appear on the other Mac
 | `init` | Setup wizard |
 | `start` | Start daemon (auto-starts on login) |
 | `stop` | Stop daemon |
+| `target` | Switch sync target (project or area) |
 | `status` | Show sync status and connection state |
 | `sync` | Force one-time sync |
 | `logs [-f]` | Show logs (`-f` to follow) |
@@ -214,6 +215,28 @@ sudo systemctl enable --now shared-things
 ```
 
 </details>
+
+## Updating
+
+### Server (Docker)
+
+```bash
+cd shared-things
+git pull
+docker compose up -d --build
+```
+
+The server auto-migrates the database on startup. No data is lost.
+
+### Client (each Mac)
+
+```bash
+cd shared-things
+git pull
+pnpm install && pnpm build
+shared-things stop
+shared-things start
+```
 
 ## Development
 
