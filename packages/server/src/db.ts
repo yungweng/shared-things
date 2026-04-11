@@ -183,7 +183,7 @@ export function getTodosSince(db: DB, since: string) {
 		.prepare(
 			`SELECT id, title, notes, due_date, tags, status, position,
               edited_at, updated_at FROM todos
-       WHERE updated_at > ? ORDER BY position`,
+       WHERE updated_at >= ? ORDER BY position`,
 		)
 		.all(since) as DbTodoRow[];
 
@@ -313,7 +313,7 @@ export function getDeletedSince(
 	return db
 		.prepare(
 			`SELECT server_id as serverId, deleted_at as deletedAt
-       FROM deleted_items WHERE recorded_at > ?`,
+       FROM deleted_items WHERE recorded_at >= ?`,
 		)
 		.all(since) as { serverId: string; deletedAt: string }[];
 }

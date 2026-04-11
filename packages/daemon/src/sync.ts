@@ -249,6 +249,9 @@ export async function runSync(): Promise<{
 		// matches exactly what Things has (prevents false change detection)
 		if (pulled > 0) {
 			const refreshed = readCurrentTodos(config);
+			const refreshPositions = new Map(
+				refreshed.map((todo, idx) => [todo.thingsId, idx]),
+			);
 			for (const todo of refreshed) {
 				const stored = localState.todos[todo.thingsId];
 				if (stored) {
@@ -257,6 +260,7 @@ export async function runSync(): Promise<{
 					stored.dueDate = todo.dueDate;
 					stored.tags = todo.tags;
 					stored.status = todo.status;
+					stored.position = refreshPositions.get(todo.thingsId) ?? stored.position;
 				}
 			}
 		}
@@ -317,6 +321,9 @@ export function applyDelta(delta: SyncDelta): void {
 		// false changes due to URL Scheme encoding differences.
 		if (result.applied > 0) {
 			const refreshed = readCurrentTodos(config);
+			const refreshPositions = new Map(
+				refreshed.map((todo, idx) => [todo.thingsId, idx]),
+			);
 			for (const todo of refreshed) {
 				const stored = localState.todos[todo.thingsId];
 				if (stored) {
@@ -325,6 +332,7 @@ export function applyDelta(delta: SyncDelta): void {
 					stored.dueDate = todo.dueDate;
 					stored.tags = todo.tags;
 					stored.status = todo.status;
+					stored.position = refreshPositions.get(todo.thingsId) ?? stored.position;
 				}
 			}
 			logInfo(`Applied delta: ${result.applied} changes`);
