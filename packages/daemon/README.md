@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/shared-things-daemon"><img src="https://img.shields.io/npm/v/shared-things-daemon.svg" alt="npm version"></a>
-  <a href="https://github.com/yungweng/shared-things/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/shared-things-daemon.svg" alt="license"></a>
+  <a href="https://github.com/yonnock/shared-things/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/shared-things-daemon.svg" alt="license"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/node/v/shared-things-daemon.svg" alt="node version"></a>
 </p>
 
@@ -164,7 +164,7 @@ Each daemon polls Things every 30 seconds via AppleScript, pushes changes to the
 ## Development
 
 ```bash
-git clone https://github.com/yungweng/shared-things.git
+git clone https://github.com/yonnock/shared-things.git
 cd shared-things
 pnpm install
 pnpm build
@@ -172,18 +172,18 @@ pnpm build
 
 ## Contributing
 
-Issues and PRs welcome! See [open issues](https://github.com/yungweng/shared-things/issues).
+Issues and PRs welcome! See [open issues](https://github.com/yonnock/shared-things/issues).
 
 ## Links
 
-- [Repository](https://github.com/yungweng/shared-things)
-- [Issues](https://github.com/yungweng/shared-things/issues)
+- [Repository](https://github.com/yonnock/shared-things)
+- [Issues](https://github.com/yonnock/shared-things/issues)
 - [npm (daemon)](https://www.npmjs.com/package/shared-things-daemon)
 - [npm (server)](https://www.npmjs.com/package/shared-things-server)
 
 ## Author
 
-Maintained by [@yungweng](https://github.com/yungweng)
+Maintained by [@yonnock](https://github.com/yonnock)
 
 ## License
 
