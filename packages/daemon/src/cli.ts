@@ -168,9 +168,7 @@ program
 					),
 				);
 				console.log(
-					chalk.dim(
-						'Run "shared-things sync" or restart the daemon.\n',
-					),
+					chalk.dim('Run "shared-things sync" or restart the daemon.\n'),
 				);
 				return;
 			}
@@ -354,9 +352,7 @@ program
 		if (options.doctor) {
 			console.log(chalk.bold("\n  Health Check\n"));
 
-			console.log(
-				`  ${chalk.dim("Config:")}    ${chalk.green("ok")}`,
-			);
+			console.log(`  ${chalk.dim("Config:")}    ${chalk.green("ok")}`);
 
 			console.log(
 				fs.existsSync(statePath)
@@ -395,7 +391,9 @@ program
 			} else {
 				const shown = options.all ? conflicts : conflicts.slice(-10);
 				console.log(
-					chalk.bold(`\n  Conflicts (${shown.length}${!options.all && conflicts.length > 10 ? ` of ${conflicts.length}` : ""})\n`),
+					chalk.bold(
+						`\n  Conflicts (${shown.length}${!options.all && conflicts.length > 10 ? ` of ${conflicts.length}` : ""})\n`,
+					),
 				);
 				for (const c of shown) {
 					console.log(
@@ -584,7 +582,6 @@ program
 			chalk.green('Reset complete. Run "shared-things sync" for a fresh sync.'),
 		);
 	});
-
 
 // =============================================================================
 // update

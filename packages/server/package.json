@@ -13,8 +13,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "author": "yungweng",
+  "author": "yonnock",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yonnock/shared-things.git",
+    "directory": "packages/server"
+  },
   "engines": {
     "node": ">=18"
   },

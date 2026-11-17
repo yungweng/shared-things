@@ -260,7 +260,8 @@ export async function runSync(): Promise<{
 					stored.dueDate = todo.dueDate;
 					stored.tags = todo.tags;
 					stored.status = todo.status;
-					stored.position = refreshPositions.get(todo.thingsId) ?? stored.position;
+					stored.position =
+						refreshPositions.get(todo.thingsId) ?? stored.position;
 				}
 			}
 		}
@@ -332,7 +333,8 @@ export function applyDelta(delta: SyncDelta): void {
 					stored.dueDate = todo.dueDate;
 					stored.tags = todo.tags;
 					stored.status = todo.status;
-					stored.position = refreshPositions.get(todo.thingsId) ?? stored.position;
+					stored.position =
+						refreshPositions.get(todo.thingsId) ?? stored.position;
 				}
 			}
 			logInfo(`Applied delta: ${result.applied} changes`);

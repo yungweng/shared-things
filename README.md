@@ -59,7 +59,7 @@ Choose one option:
 **Option A: Docker (recommended)**
 
 ```bash
-git clone https://github.com/yungweng/shared-things.git
+git clone https://github.com/yonnock/shared-things.git
 cd shared-things
 docker compose up -d
 ```
@@ -67,7 +67,7 @@ docker compose up -d
 **Option B: Direct**
 
 ```bash
-git clone https://github.com/yungweng/shared-things.git
+git clone https://github.com/yonnock/shared-things.git
 cd shared-things
 pnpm install && pnpm build
 node packages/server/dist/cli.js start -d --port 3334
@@ -102,7 +102,7 @@ On **each Mac**:
 On **each Mac**:
 
 ```bash
-git clone https://github.com/yungweng/shared-things.git
+git clone https://github.com/yonnock/shared-things.git
 cd shared-things
 pnpm install && pnpm build
 
@@ -241,7 +241,7 @@ shared-things start
 ## Development
 
 ```bash
-git clone https://github.com/yungweng/shared-things.git
+git clone https://github.com/yonnock/shared-things.git
 cd shared-things
 pnpm install
 pnpm build     # Build all packages

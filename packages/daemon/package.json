@@ -12,8 +12,13 @@
     "dev": "tsx watch src/cli.ts",
     "typecheck": "tsc --noEmit"
   },
-  "author": "yungweng",
+  "author": "yonnock",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yonnock/shared-things.git",
+    "directory": "packages/daemon"
+  },
   "engines": {
     "node": ">=18"
   },
